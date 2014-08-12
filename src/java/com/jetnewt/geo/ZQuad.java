@@ -22,9 +22,8 @@ package com.jetnewt.geo;
  * zoom level before moving on to the next one, so 5-8 at zoom 2 cover 1 from
  * zoom 1, and so forth.
  *
- * This class provides static methods for manipulating z-quads directly as
- * 64-bit longs. So you don't create instances of this class, the instances
- * are longs.
+ * This class provides static methods for manipulating quads directly as 64-bit
+ * longs. So you don't create instances of this class, the instances are longs.
  *
  * A bit of terminology used in the implementation. The relations between quads
  * are the following.
@@ -92,11 +91,11 @@ public class ZQuad {
    * whether the machine supports {@link Long#numberOfLeadingZeros(long)}
    * natively.
    */
-  public static int getZoomLevel(long zQuad) {
+  public static int getZoomLevel(long quad) {
     // Determine which is the highest one-bit. Each zoom level uses exactly 2
     // bits of state but are offset by ~33%, hence the zoom level is ln2(n)/2
     // adjusted for the offset.
-    int highestOneBit = highestOneBit(zQuad);
+    int highestOneBit = highestOneBit(quad);
     // Calculate the zoom level bias that separates the coarser zoom level that
     // can have this highest bit set, and the finer one.
     long zoomBias = ((1L << highestOneBit) - 1L) & kBias64Mask;
@@ -104,7 +103,7 @@ public class ZQuad {
     // below then we're looking at a value belonging to the coarser zoom level
     // and the delta becomes non-negative. If it is greater than then it
     // belongs to the finer zoom level and the value becomes negative.
-    long delta = (zoomBias - 1) - zQuad;
+    long delta = (zoomBias - 1) - quad;
     // Extract the sign bit as an integer. If the value belongs to the finer
     // zoom level the delta is negative and this value is 1, otherwise it is 0.
     int isFineBonus = (int) ((delta >> 63) & 1);
@@ -169,7 +168,9 @@ public class ZQuad {
     // Get their respective scalars.
     long aScalar = quadToScalar(aQuad, aZoom);
     long bScalar = quadToScalar(bQuad, bZoom);
-    // Find most significant bit of difference between the two scalars.
+    // Find most significant bit of difference between the two scalars. Because
+    // of the recursive zig-zag way the quad indices are constructed this gives
+    // the highest zoom level where there is a difference.
     long allDifferences = aScalar ^ bScalar;
     int highestDifference = highestOneBit(allDifferences);
     // The amount to zoom out such that the most significant difference will be
@@ -222,9 +223,9 @@ public class ZQuad {
    * ancestor's level and now considered the ancestor to be everything, what is
    * the quad that corresponds to the descendant.
    */
-  public static long getDescendancy(long zQuad, int amount) {
+  public static long getDescendancy(long quad, int amount) {
     long descendancyMask = ((1L << (amount << 1)) - 1);
-    long descendancyScalar = (zQuad - getZoomBias(amount)) & descendancyMask;
+    long descendancyScalar = (quad - getZoomBias(amount)) & descendancyMask;
     return scalarToQuad(descendancyScalar, amount);
   }
 
@@ -307,7 +308,7 @@ public class ZQuad {
 
   /**
    * Given a pair of coordinates within the unit square (that is, both between
-   * 0 and 1, not including 1), returns a zoom level 31 z-quad over the unit
+   * 0 and 1, not including 1), returns the zoom level 31 quad over the unit
    * square that contains that point.
    */
   public static long fromUnit(double x, double y) {
@@ -349,7 +350,8 @@ public class ZQuad {
     // The whole spreading out thing is really just a way to make room for a
     // 2-bit result for each pair of 1-bits in x any y. And by the recursive
     // construction of quads this sum is exactly the scalar value of the
-    // corresponding quad.
+    // corresponding quad. This is part of why the enumeration of indexes is
+    // zig-zag the way it is, to make this work.
     long scalar = xSpread | (ySpread << 1);
     return scalarToQuad(scalar, kMaxZoomLevel);
   }
@@ -377,8 +379,8 @@ public class ZQuad {
     // Pack the spread out coordinates into 32 bits, add 0.5 to get to the
     // middle (that's the (x << 1) + 1 part) then shift the value up enough to
     // make it 31 bits. Ideally we would do (n << (30 - zoom)) but we've already
-    // zoomed out one step to add 0.5 and if the zoom level is we're shifting by
-    // a negative amount. On the other hand it is well defined how
+    // zoomed out one step to add 0.5 and if the zoom level is 31 we're now
+    // shifting by a negative amount. On the other hand it is well defined how
     // ((n << 30) >> zoom) works even if zoom is 31.
     long x = (((compact64To32(xSpread) << 1) + 1) << 30) >>> zoom;
     long y = (((compact64To32(ySpread) << 1) + 1) << 30) >>> zoom;
@@ -390,8 +392,8 @@ public class ZQuad {
    * unit square. So the top left unit for everything is (0.0, 0.0), the top
    * left for the bottom left corner is (0.0, 0.5), etc.
    */
-  public static UnitPoint getUnitQuadTopLeft(long zQuad) {
-    return getUnitQuadTopLeft(zQuad, getZoomLevel(zQuad));
+  public static UnitPoint getUnitQuadTopLeft(long quad) {
+    return getUnitQuadTopLeft(quad, getZoomLevel(quad));
   }
 
   /**
@@ -399,8 +401,8 @@ public class ZQuad {
    * unit square. So the top left unit for everything is (0.0, 0.0), the top
    * left for the bottom left corner is (0.0, 0.5), etc.
    */
-  public static UnitPoint getUnitQuadTopLeft(long zQuad, int zoom) {
-    long scalar = quadToScalar(zQuad, zoom);
+  public static UnitPoint getUnitQuadTopLeft(long quad, int zoom) {
+    long scalar = quadToScalar(quad, zoom);
     // Mask out the x and y components of the scalar. This is exactly the
     // encoding step from fromUnit but in reverse.
     long xSpread = scalar & 0x5555555555555555L;
