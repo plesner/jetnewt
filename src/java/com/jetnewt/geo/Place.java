@@ -1,8 +1,11 @@
 package com.jetnewt.geo;
+
+import com.jetnewt.console.IConsoleObject;
+
 /**
  * A place represents a subdivision of the surface of the earth.
  */
-public class Place {
+public class Place implements IConsoleObject {
 
   private final int zoom;
   private final long quad;
@@ -24,6 +27,10 @@ public class Place {
     return this.zoom;
   }
 
+  long getQuad() {
+    return this.quad;
+  }
+
   /**
    * Returns true if this place represents the entire earth.
    */
@@ -34,19 +41,32 @@ public class Place {
   /**
    * Returns a rect describing the boundaries of this place on the unit square.
    */
-  public UnitRect getUnitBounds() {
-    UnitPoint topLeft = ZQuad.getUnitQuadTopLeft(quad, zoom);
-    double left = topLeft.getX();
-    double top = topLeft.getY();
-    double length = ZQuad.getUnitQuadLength(zoom);
-    return UnitRect.fromBounds(top, left, top + length, left + length);
+  public UnitLatLngRect getUnitBounds() {
+    UnitPoint topLeft = ZQuad.getTopLeft(quad, zoom);
+    double length = ZQuad.getLength(zoom);
+    UnitLatLng northEast = new UnitLatLng(topLeft.getY(), topLeft.getX());
+    UnitLatLng southWest = new UnitLatLng(topLeft.getY() + length,
+        topLeft.getX() + length);
+    return new UnitLatLngRect(northEast, southWest);
   }
 
   /**
    * Returns a point describing the middle of this place on the unit square.
    */
-  public UnitPoint getUnitMiddle() {
-    return ZQuad.getUnitQuadMiddle(quad, zoom);
+  public UnitLatLng getUnitMiddle() {
+    UnitPoint point = ZQuad.getMiddle(quad, zoom);
+    return new UnitLatLng(point.getY(), point.getX());
+  }
+
+  public GeoLatLngRect getGeoBounds() {
+    return CoordinateConverter.global().unitToGeo(getUnitBounds());
+  }
+
+  /**
+   * Returns a point describing the middle of this place on the earth.
+   */
+  public GeoLatLng getGeoMiddle() {
+    return CoordinateConverter.global().unitToGeo(getUnitMiddle());
   }
 
   /**
@@ -57,6 +77,11 @@ public class Place {
   public Place getAncestor(int steps) {
     assert this.zoom >= steps;
     return new Place(this.zoom - steps, ZQuad.getAncestor(this.quad, steps));
+  }
+
+  public Place toZoom(int dest) {
+    assert this.zoom >= dest;
+    return new Place(dest, ZQuad.getAncestor(this.quad, this.zoom - dest));
   }
 
   /**
@@ -78,12 +103,18 @@ public class Place {
     return this.quad == that.quad;
   }
 
+  @Override
+  public int hashCode() {
+    return ZQuad.hashCode(this.quad);
+  }
+
   /**
    * Given a WGS84 latitude and longitude, returns the place that contains that
    * point that has the highest resolution we can represent.
    */
-  public static Place fromWgs84(double lat, double lng) {
-    long quad = ZQuad.fromUnit(Arc.fromWgs84(lat), Arc.fromWgs84(lng));
+  public static Place fromWgs84(GeoLatLng geo) {
+    UnitLatLng unit = CoordinateConverter.global().geoToUnit(geo);
+    long quad = ZQuad.fromUnit(unit.getUnitLng(), unit.getUnitLat());
     return new Place(31, quad);
   }
 
@@ -93,6 +124,11 @@ public class Place {
    */
   public static Place fromQuad(long quad) {
     return new Place(quad);
+  }
+
+  @Override
+  public Object toPlankton() {
+    return getGeoBounds();
   }
 
 }

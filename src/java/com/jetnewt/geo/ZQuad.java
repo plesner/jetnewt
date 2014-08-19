@@ -1,4 +1,6 @@
 package com.jetnewt.geo;
+
+
 /**
  * A z-quad is a 64-bit quantity that identifies a regular square sub-
  * division of a square space. Here's an illustration of the first 3 zoom
@@ -183,7 +185,7 @@ public class ZQuad {
   /**
    * Returns the given quad's scalar value, given its zoom level.
    */
-  private static long quadToScalar(long quad, int zoom) {
+  public static long quadToScalar(long quad, int zoom) {
     return quad - getZoomBias(zoom);
   }
 
@@ -227,6 +229,12 @@ public class ZQuad {
     long descendancyMask = ((1L << (amount << 1)) - 1);
     long descendancyScalar = (quad - getZoomBias(amount)) & descendancyMask;
     return scalarToQuad(descendancyScalar, amount);
+  }
+
+  public static long getChildThatsAncestorOf(long ancestor, long descendant) {
+    int ancestorZoom = getZoomLevel(ancestor);
+    int descendantZoom = getZoomLevel(descendant);
+    return ZQuad.getAncestor(descendant, descendantZoom - ancestorZoom - 1);
   }
 
   /**
@@ -361,8 +369,8 @@ public class ZQuad {
    * square. So the middle unit for everything is (0.5, 0.5), the midpoint for
    * the top left corner is (0.25, 0.25), etc.
    */
-  public static UnitPoint getUnitQuadMiddle(long quad) {
-    return getUnitQuadMiddle(quad, getZoomLevel(quad));
+  public static UnitPoint getMiddle(long quad) {
+    return getMiddle(quad, getZoomLevel(quad));
   }
 
   /**
@@ -370,7 +378,7 @@ public class ZQuad {
    * square. So the middle unit for everything is (0.5, 0.5), the midpoint for
    * the top left corner is (0.25, 0.25), etc.
    */
-  public static UnitPoint getUnitQuadMiddle(long quad, int zoom) {
+  public static UnitPoint getMiddle(long quad, int zoom) {
     long scalar = quadToScalar(quad, zoom);
     // Mask out the x and y components of the scalar. This is exactly the
     // encoding step from fromUnit but in reverse.
@@ -392,8 +400,8 @@ public class ZQuad {
    * unit square. So the top left unit for everything is (0.0, 0.0), the top
    * left for the bottom left corner is (0.0, 0.5), etc.
    */
-  public static UnitPoint getUnitQuadTopLeft(long quad) {
-    return getUnitQuadTopLeft(quad, getZoomLevel(quad));
+  public static UnitPoint getTopLeft(long quad) {
+    return getTopLeft(quad, getZoomLevel(quad));
   }
 
   /**
@@ -401,7 +409,7 @@ public class ZQuad {
    * unit square. So the top left unit for everything is (0.0, 0.0), the top
    * left for the bottom left corner is (0.0, 0.5), etc.
    */
-  public static UnitPoint getUnitQuadTopLeft(long quad, int zoom) {
+  public static UnitPoint getTopLeft(long quad, int zoom) {
     long scalar = quadToScalar(quad, zoom);
     // Mask out the x and y components of the scalar. This is exactly the
     // encoding step from fromUnit but in reverse.
@@ -418,8 +426,53 @@ public class ZQuad {
    * Given a zoom level, returns the length of the side of a quad at that zoom
    * level on the unit square.
    */
-  public static double getUnitQuadLength(int zoom) {
+  public static double getLength(int zoom) {
     return 1.0 / (1L << zoom);
+  }
+
+  private static final String CONSONANTS = "bdfghjklmnpqrstvwz";
+  private static final String VOWELS = "aeiouy";
+
+  private static String chunkToString(int chunk) {
+    String result = "";
+    int current = chunk;
+    String active, passive;
+    if (current < 11664) {
+      active = VOWELS;
+      passive = CONSONANTS;
+    } else {
+      active = CONSONANTS;
+      passive = VOWELS;
+      current -= 11664;
+    }
+    for (int i = 0; i < 4; i++) {
+      result = active.charAt(current % active.length()) + result;
+      current = current / active.length();
+      String tmp = active;
+      active = passive;
+      passive = tmp;
+    }
+    assert current == 0;
+    return result;
+  }
+
+  public static String toString(long quad) {
+    String result = "";
+    long current = quad;
+    do {
+      int zoomRemaining = ZQuad.getZoomLevel(current);
+      int zoomChunkSize = Math.min(zoomRemaining, 7);
+      if (zoomChunkSize == 7 && (zoomRemaining % 7) != 0)
+        zoomChunkSize = zoomRemaining % 7;
+      int chunk = (int) ZQuad.getDescendancy(current, zoomChunkSize);
+      current = ZQuad.getAncestor(current, zoomChunkSize);
+      result = chunkToString(chunk) + " " + result;
+    } while (current > 0);
+    return result;
+  }
+
+  public static int hashCode(long value) {
+    return ((int) (value >> 32)) & ((int) value);
   }
 
 }

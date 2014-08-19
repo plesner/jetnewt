@@ -5,9 +5,9 @@ import static com.jetnewt.geo.ZQuad.fromUnit;
 import static com.jetnewt.geo.ZQuad.getAncestor;
 import static com.jetnewt.geo.ZQuad.getDescendancy;
 import static com.jetnewt.geo.ZQuad.getDescendant;
-import static com.jetnewt.geo.ZQuad.getUnitQuadLength;
-import static com.jetnewt.geo.ZQuad.getUnitQuadMiddle;
-import static com.jetnewt.geo.ZQuad.getUnitQuadTopLeft;
+import static com.jetnewt.geo.ZQuad.getLength;
+import static com.jetnewt.geo.ZQuad.getMiddle;
+import static com.jetnewt.geo.ZQuad.getTopLeft;
 import static com.jetnewt.geo.ZQuad.getZoomBias;
 import static com.jetnewt.geo.ZQuad.getZoomLevel;
 import static com.jetnewt.geo.ZQuad.int32ToUnit;
@@ -67,12 +67,12 @@ public class ZQuadTest extends TestCase {
   }
 
   private static double[] getBounds(long zQuad) {
-    UnitPoint topLeft = getUnitQuadTopLeft(zQuad);
+    UnitPoint topLeft = getTopLeft(zQuad);
     int zoom = getZoomLevel(zQuad);
-    double length = getUnitQuadLength(zoom);
+    double length = getLength(zoom);
     return new double[] {
-        topLeft.getX(), topLeft.getY(),
-        topLeft.getX() + length, topLeft.getY() + length
+        topLeft.getY(), topLeft.getX(),
+        topLeft.getY() + length, topLeft.getX() + length
     };
   }
 
@@ -170,7 +170,7 @@ public class ZQuadTest extends TestCase {
   }
 
   private void checkGetUnitQuadMiddle(double x, double y, long zQuad) {
-    UnitPoint result = getUnitQuadMiddle(zQuad);
+    UnitPoint result = getMiddle(zQuad);
     assertEquals(x, result.getX(), 1e-9);
     assertEquals(y, result.getY(), 1e-9);
   }
@@ -195,12 +195,12 @@ public class ZQuadTest extends TestCase {
   }
 
   public void testGetUnitQuadLength() {
-    assertEquals(1.0, getUnitQuadLength(0));
-    assertEquals(0.5, getUnitQuadLength(1));
-    assertEquals(0.25, getUnitQuadLength(2));
-    assertEquals(0.0625, getUnitQuadLength(4));
-    assertEquals(0.00390625, getUnitQuadLength(8));
-    assertTrue(getUnitQuadLength(31) > 0.0);
+    assertEquals(1.0, getLength(0));
+    assertEquals(0.5, getLength(1));
+    assertEquals(0.25, getLength(2));
+    assertEquals(0.0625, getLength(4));
+    assertEquals(0.00390625, getLength(8));
+    assertTrue(getLength(31) > 0.0);
   }
 
   public void testGetDescendancy() {
@@ -214,7 +214,7 @@ public class ZQuadTest extends TestCase {
   /**
    * Returns a random z-quad at the highest zoom level.
    */
-  private static long nextPreciseZQuad(Random random) {
+  static long nextPreciseZQuad(Random random) {
     double x = random.nextDouble();
     double y = random.nextDouble();
     return fromUnit(x, y);
@@ -223,7 +223,7 @@ public class ZQuadTest extends TestCase {
   /**
    * Returns a z-quad at the given zoom level.
    */
-  private static long nextZQuad(Random random, int zoomLevel) {
+  static long nextZQuad(Random random, int zoomLevel) {
     long point = nextPreciseZQuad(random);
     return getAncestor(point, ZQuad.kMaxZoomLevel - zoomLevel);
   }

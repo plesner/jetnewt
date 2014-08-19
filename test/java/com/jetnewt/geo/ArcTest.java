@@ -41,8 +41,8 @@ public class ArcTest extends TestCase {
    */
   static class Position {
     final DmsLatLong dms;
-    final LatLongPoint dec;
-    public Position(DmsLatLong dms, LatLongPoint dec) {
+    final GeoLatLng dec;
+    public Position(DmsLatLong dms, GeoLatLng dec) {
       this.dms = dms;
       this.dec = dec;
     }
@@ -56,65 +56,73 @@ public class ArcTest extends TestCase {
   // look the way they do.
   static final Position kSydney = new Position(
       new DmsLatLong(33, 51, 35.0, kSouth, 151, 12, 34, kEast),
-      new LatLongPoint(-33.859972, 151.209444));
+      new GeoLatLng(-33.859972, 151.209444));
   static final Position kCapeTown = new Position(
       new DmsLatLong(33, 55, 31, kSouth, 18, 25, 26, kEast),
-      new LatLongPoint(-33.925278, 18.423889));
+      new GeoLatLng(-33.925278, 18.423889));
   static final Position kBuenosAires = new Position(
       new DmsLatLong(34, 36, 12, kSouth, 58, 22, 54, kWest),
-      new LatLongPoint(-34.603333, -58.381667));
+      new GeoLatLng(-34.603333, -58.381667));
   static final Position kScottBaseAntarctica = new Position(
       new DmsLatLong(77, 50, 53.8, kSouth, 166, 46, 11.7, kEast),
-      new LatLongPoint(-77.848281, 166.769907));
+      new GeoLatLng(-77.848281, 166.769907));
   static final Position kQuito = new Position(
       new DmsLatLong(0, 15, 1, kSouth, 78, 35, 1, kWest),
-      new LatLongPoint(-0.2505, -78.583833));
+      new GeoLatLng(-0.2505, -78.583833));
   static final Position kUpoluSamoa = new Position(
       new DmsLatLong(13, 55, 1, kSouth, 171, 45, 1, kWest),
-      new LatLongPoint(-13.917267, -171.7505));
+      new GeoLatLng(-13.917267, -171.7505));
   static final Position kAlmostZeroForward = new Position(
       new DmsLatLong(0, 0, 0.0001, kNorth, 0, 0, 0.0001, kEast),
-      new LatLongPoint(0.00001, 0.00001));
+      new GeoLatLng(0.00001, 0.00001));
   static final Position kAlmostZeroBackward = new Position(
       new DmsLatLong(0, 0, 0.001, kSouth, 0, 0, 0.001, kWest),
-      new LatLongPoint(-0.00001, -0.00001));
+      new GeoLatLng(-0.00001, -0.00001));
   static final Position kKarachi = new Position(
       new DmsLatLong(24, 51, 36, kNorth, 67, 0, 36, kEast),
-      new LatLongPoint(24.86, 67.01));
+      new GeoLatLng(24.86, 67.01));
   static final Position kKamchatka = new Position(
-      new DmsLatLong(53, 1, 0, kNorth, 158, 39, 0, kEast),
-      new LatLongPoint(53.016667, 158.65));
+      new DmsLatLong(53, 1, 1, kNorth, 158, 39, 1, kEast),
+      new GeoLatLng(53.016667, 158.6505));
   static final Position kQaanaaq = new Position(
       new DmsLatLong(77, 28, 0, kNorth, 69, 13, 50, kWest),
-      new LatLongPoint(77.466667, -69.230556));
+      new GeoLatLng(77.466667, -69.230556));
+  static final Position kAarhus = new Position(
+      new DmsLatLong(56, 9, 0, kNorth, 10, 13, 1, kEast),
+      new GeoLatLng(56.15, 10.216717));
 
   static final Position[] kAllPositions = {
     kSydney, kCapeTown, kBuenosAires, kScottBaseAntarctica, kQuito, kUpoluSamoa,
-    kAlmostZeroForward, kAlmostZeroBackward, kKarachi, kKamchatka, kQaanaaq
+    kAlmostZeroForward, kAlmostZeroBackward, kKarachi, kKamchatka, kQaanaaq,
+    kAarhus
   };
 
-  private void checkConversion(double dec, int deg, int min, double sec, boolean isForward) {
-    double dmsArc = Arc.fromWgs84(deg, min, sec, isForward);
-    assertTrue(0 <= Arc.toUnit(dmsArc));
-    assertTrue(Arc.toUnit(dmsArc) < 1);
-    assertEquals(deg, Arc.getDegrees(dmsArc));
-    assertEquals(min, Arc.getMinutes(dmsArc));
-    assertEquals(sec, Arc.getSeconds(dmsArc), 1e-9);
-    assertEquals(dec, Arc.toDecimal(dmsArc), 1e-3);
-    double decArc = Arc.fromWgs84(dec);
-    assertEquals(dmsArc, decArc, 1e-6);
-    assertTrue(0 <= Arc.toUnit(decArc));
-    assertTrue(Arc.toUnit(decArc) < 1);
-    assertEquals(deg, Arc.getDegrees(decArc));
-    assertEquals(min, Arc.getMinutes(decArc));
-    assertEquals(sec, Arc.getSeconds(decArc), 1.5);
+  private void checkConversion(OrdinateConverter unitMap, double dec, int deg, int min,
+      double sec, boolean isForward) {
+    double dmsUnit = unitMap.toUnit(deg, min, sec, isForward);
+    assertTrue(0 <= dmsUnit);
+    assertTrue(dmsUnit < 1);
+    assertEquals(deg, unitMap.unitToDegrees(dmsUnit));
+    assertEquals(min, unitMap.unitToMinutes(dmsUnit));
+    assertEquals(sec, unitMap.unitToSeconds(dmsUnit), 1e-9);
+    assertEquals(dec, unitMap.fromUnit(dmsUnit), 1e-3);
+    double decUnit = unitMap.toUnit(dec);
+    assertEquals(dmsUnit, decUnit, 1e-5);
+    assertTrue(0 <= decUnit);
+    assertTrue(decUnit < 1);
+    assertEquals(deg, unitMap.unitToDegrees(decUnit));
+    assertEquals(min, unitMap.unitToMinutes(decUnit));
+    assertEquals(sec, unitMap.unitToSeconds(decUnit), 1.5);
   }
 
   public void testPointArcs() {
+    CoordinateConverter globalMap = CoordinateConverter.global();
+    OrdinateConverter latMap = globalMap.getLatMap();
+    OrdinateConverter lngMap = globalMap.getLngMap();
     for (Position pos : kAllPositions) {
       DmsLatLong dms = pos.dms;
-      checkConversion(pos.dec.getLat(), dms.degLat, dms.minLat, dms.secLat, dms.isNorth);
-      checkConversion(pos.dec.getLong(), dms.degLng, dms.minLng, dms.secLng, dms.isEast);
+      checkConversion(latMap, pos.dec.getGeoLat(), dms.degLat, dms.minLat, dms.secLat, dms.isNorth);
+      checkConversion(lngMap, pos.dec.getGeoLng(), dms.degLng, dms.minLng, dms.secLng, dms.isEast);
     }
   }
 
