@@ -34,4 +34,9 @@ public class UnitLatLng {
         && Math.abs(this.unitLng - that.unitLng) <= delta;
   }
 
+  @Override
+  public String toString() {
+    return "(" + unitLat + ", " + unitLng + ")";
+  }
+
 }

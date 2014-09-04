@@ -1,0 +1,33 @@
+<html>
+  <head>
+    <script type="text/javascript" src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAS3Sy6Ga6Bzh3urmOKxtImDJjS57IYmos"></script>
+    <script src="zquad.js"></script>
+    <script src="zquad-gmaps.js"></script>
+    <script src="zquad-main.js"></script>
+    <link rel="stylesheet" type="text/css" href="zquad.css" />
+  </head>
+  <body>
+  <div id="map"></div>
+  <div id="footer">
+    <div class="output name">Name: <span id="name"></span></div>
+    <div class="output quad">Quad: <span id="quad"></span></div>
+    <div class="output zoom">Zoom: <span id="zoom"></span></div>
+    <div class="output lat">Lat: <span id="lat"></span></div>
+    <div class="output lng">Lng: <span id="lng"></span></div>
+    <div class="output navig">
+      <div style="float: right">
+      <a id="c0" href="">+nw</a>
+      <a id="c1" href="">+ne</a><br/>
+      <a id="c2" href="">+sw</a>
+      <a id="c3" href="">+se</a>
+      </div>
+      <div style="float: right; margin-right: 0.5em; margin-top: 0.5em">
+        <a id="parent" href="">–</a>
+      </div>
+    </div>
+  </div>
+  <script>
+    document.addEventListener("DOMContentLoaded", zquad.main.onLoad)
+  </script>
+  </body>
+</html>

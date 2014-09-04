@@ -1,6 +1,9 @@
 package com.jetnewt.geo;
 
 
+
+
+
 /**
  * A z-quad is a 64-bit quantity that identifies a regular square sub-
  * division of a square space. Here's an illustration of the first 3 zoom
@@ -226,6 +229,10 @@ public class ZQuad {
    * the quad that corresponds to the descendant.
    */
   public static long getDescendancy(long quad, int amount) {
+    return getDescendancy(quad, getZoomLevel(quad), amount);
+  }
+
+  public static long getDescendancy(long quad, long zoom, int amount) {
     long descendancyMask = ((1L << (amount << 1)) - 1);
     long descendancyScalar = (quad - getZoomBias(amount)) & descendancyMask;
     return scalarToQuad(descendancyScalar, amount);
@@ -430,45 +437,419 @@ public class ZQuad {
     return 1.0 / (1L << zoom);
   }
 
-  private static final String CONSONANTS = "bdfghjklmnpqrstvwz";
-  private static final String VOWELS = "aeiouy";
+  static final String CONSONANTS = "bcdfghjklmnpqrstvwxz";
+  static final String VOWELS = "aeiouy";
 
-  private static String chunkToString(int chunk) {
-    String result = "";
-    int current = chunk;
-    String active, passive;
-    if (current < 11664) {
-      active = VOWELS;
-      passive = CONSONANTS;
+  static class ChunkString {
+
+    private final boolean isEastern;
+    private final int sector6;
+    private final int block4;
+    private final int region5;
+    private final int group6;
+    private final int cell20;
+
+    private int cellIndexOrig;
+    private long xm1, ym1, xm2, ym2, xm3, ym3, xm4, ym4, scalar, chunk;
+    boolean isZoomed;
+    private int zoomDelta;
+    public boolean validate = true;
+
+    public ChunkString(boolean isEastern, int sector6, int block4, int region5,
+        int group6, int cell20) {
+      assert 0 <= sector6 && sector6 < 6;
+      assert 0 <= block4 && block4 < 4;
+      assert 0 <= region5 && region5 < 5;
+      assert 0 <= group6 && group6 < 6;
+      assert 0 <= cell20 && cell20 < 20;
+      this.isEastern = isEastern;
+      this.sector6 = sector6;
+      this.block4 = block4;
+      this.region5 = region5;
+      this.group6 = group6;
+      this.cell20 = cell20;
+    }
+
+    public boolean isEastern() {
+      return this.isEastern;
+    }
+
+    public int getSector6() {
+      return this.sector6;
+    }
+
+    public int getBlock4() {
+      return this.block4;
+    }
+
+    public int getRegion5() {
+      return this.region5;
+    }
+
+    public int getGroup6() {
+      return this.group6;
+    }
+
+    public int getCell20() {
+      return this.cell20;
+    }
+
+    public long getChunk() {
+      int[] cellIndexAndZoomed = kGroup6CellsInv[region5][group6][cell20];
+      int cellIndex = cellIndexAndZoomed[0];
+      if (cellIndex == -1)
+        return -1;
+      boolean isZoomed = cellIndexAndZoomed[1] != 0;
+      if (validate) {
+        // Assert.assertEquals(cellIndexOrig, cellIndex);
+      }
+      long x = cellIndex % 16;
+      long y = cellIndex / 16;
+      if (validate) {
+        // Assert.assertEquals(xm1, x);
+        // Assert.assertEquals(ym1, y);
+      }
+      x += 16 * (block4 % 2);
+      y += 24 * (block4 / 2);
+      int third = (sector6 / 2);
+      if (y >= 44 || (third == 2 && y >= 40))
+        return -1;
+      if (validate) {
+        // Assert.assertEquals(xm2, x);
+        // Assert.assertEquals(ym2, y);
+      }
+      x += 32 * (sector6 % 2);
+      y += 44 * (sector6 / 2);
+      if (validate) {
+        // Assert.assertEquals(xm3, x);
+        // Assert.assertEquals(ym3, y);
+      }
+      x += isEastern ? 64 : 0;
+      if (validate) {
+        // Assert.assertEquals(xm4, x);
+        // Assert.assertEquals(ym4, y);
+      }
+      long scalar = spread32To64(x) | (spread32To64(y) << 1);
+      int zoomDelta = 0;
+      findDelta: if (isZoomed) {
+        zoomDelta = 7;
+        for (int i = 0; i <= 7; i++) {
+          if (((scalar >> (i << 1)) & 3) == 3) {
+            zoomDelta = i + 1;
+            break findDelta;
+          }
+        }
+      }
+      long chunkDescendant = scalar + getZoomBias(7);
+      long chunk = getAncestor(chunkDescendant, zoomDelta);
+      int zoom = 7 - zoomDelta;
+      long expectedScalar = getLevel7Middle(quadToScalar(chunk, zoom), zoom);
+      if (scalar != expectedScalar)
+        return -1;
+      if (validate) {
+        /*
+        Assert.assertEquals(this.isZoomed, isZoomed);
+        Assert.assertEquals(this.scalar, scalar);
+        Assert.assertEquals(this.zoomDelta, zoomDelta);
+        Assert.assertEquals(this.chunk, chunk);
+        */
+      }
+      return chunk;
+    }
+
+    @Override
+    public String toString() {
+      char v0 = VOWELS.charAt(sector6);
+      char c0 = CONSONANTS.charAt(5 * block4 + region5);
+      char v1 = VOWELS.charAt(group6);
+      char c1 = CONSONANTS.charAt(cell20);
+      if (isEastern) {
+        return "" + c0 + v0 + c1 + v1;
+      } else {
+        return "" + v0 + c0 + v1 + c1;
+      }
+    }
+
+  }
+
+  /**
+   * Given a value between 0 and 24 (that is, 4x6), which region does the value
+   * belong to?
+   */
+  private static final int[] kRegion5s = {
+    0, 0, 1, 1,
+    0, 0, 1, 1,
+    0, 2, 2, 1,
+    3, 2, 2, 4,
+    3, 3, 4, 4,
+    3, 3, 4, 4
+  };
+
+  /**
+   * Given a group5-block24, returns the shape to use within the block. Each
+   * kind of block configuration has a different index here and then the indices
+   * used internally within that block is given below.
+   *
+   *   0 0 0 0   1 1 1 1   0 0 0 0   1 1 1 1
+   *   0 0 0 0   1 1 1 1   0 0 0 0   1 1 1 1
+   *   0 0 0 2   2 1 1 1   0 0 0 2   2 1 1 1
+   *   0 0 2 2   2 2 1 1   0 0 2 2   2 2 1 1
+   *
+   *   3 3 2 2   2 2 4 4   3 3 2 2   2 2 4 4
+   *   3 3 3 2   2 4 4 4   3 3 3 2   2 4 4 4
+   *   3 3 3 3   4 4 4 4   3 3 3 3   4 4 4 4
+   *   3 3 3 3   4 4 4 4   3 3 3 3   4 4 4 4
+   *
+   *   3 5 5 5   0 0 0 0   1 1 1 1   4 5 5 5
+   *   5 5 5 5   0 0 0 0   1 1 1 1   5 5 5 5
+   *   5 5 5 5   0 0 0 2   2 1 1 1   5 5 5 5
+   *   5 5 5 5   0 0 2 2   2 2 1 1   5 5 5 5
+   *
+   *   5 5 5 5   3 3 2 2   2 2 4 4   5 5 5 5
+   *   5 5 5 5   3 3 3 2   2 4 4 4   5 5 5 5
+   *   5 5 5 5   3 3 3 3   4 4 4 4   5 5 5 5
+   *   5 5 5 0   3 3 3 3   4 4 4 4   5 5 5 1
+   *
+   *   0 0 0 0   1 1 1 1   0 0 0 0   1 1 1 1
+   *   0 0 0 0   1 1 1 1   0 0 0 0   1 1 1 1
+   *   0 0 0 2   2 1 1 1   0 0 0 2   2 1 1 1
+   *   0 0 2 2   2 2 1 1   0 0 2 2   2 2 1 1
+   *
+   *   3 3 2 2   2 2 4 4   3 3 2 2   2 2 4 4
+   *   3 3 3 2   2 4 4 4   3 3 3 2   2 4 4 4
+   *   3 3 3 3   4 4 4 4   3 3 3 3   4 4 4 4
+   *   3 3 3 3   4 4 4 4   3 3 3 3   4 4 4 4
+   */
+  private static final int[][] kGroup6Shape = {
+    {0, 1, 0, 1},
+    {2, 3, 2, 3},
+    {4, 0, 1, 5},
+    {6, 2, 3, 7},
+    {0, 1, 0, 1},
+    {2, 3, 2, 3}
+  };
+
+  private static final int[][][] kGroup6ShapeCell20s = {
+    { // --- 0 ---
+      {0,  -1}, {0,   2}, {0,   3}, {0,   4},
+      {0,   5}, {0,  -7}, {0,   8}, {0, -10},
+      {0,  11}, {0,  12}, {0, -14}, {2,   0},
+      {0,  15}, {0, -17}, {2,   2}, {2,  -4},
+    },
+    { // --- 1 ---
+      {1,  -1}, {1,   2}, {1,   3}, {1,   4},
+      {1,   5}, {1,  -7}, {1,   8}, {1, -10},
+      {2,   1}, {1,  11}, {1, -13}, {1,  14},
+      {2,   5}, {2,  -7}, {1,  15}, {1, -17},
+    },
+    { // --- 2 ---
+      {3,  -1}, {3,   2}, {2,   8}, {2,   9},
+      {3,   3}, {3,  -5}, {3,   6}, {2, -14},
+      {3,   7}, {3,   8}, {3, -10}, {3,  11},
+      {3,  12}, {3, -14}, {3,  15}, {3, -17}
+    },
+    { // --- 3 ---
+      {2, -11}, {2,  12}, {4,   0}, {4,   1},
+      {2,  15}, {4,  -3}, {4,   4}, {4,  -6},
+      {4,   7}, {4,   8}, {4, -10}, {4,  11},
+      {4,  12}, {4, -14}, {4,  15}, {4, -17}
+    },
+    { // --- 4 ---
+      {3, -19}, {5,   0}, {5,   1}, {5,   2},
+      {5,   3}, {5,  -5}, {5,   6}, {5,  -8},
+      {5,   9}, {5,  10}, {5, -12}, {5,  13},
+      {5,  14}, {5, -16}, {5,  17}, {5, -19},
+    },
+    { // --- 5 ---
+      {4, -19}, {5,   0}, {5,   1}, {5,   2},
+      {5,   3}, {5,  -5}, {5,   6}, {5,  -8},
+      {5,   9}, {5,  10}, {5, -12}, {5,  13},
+      {5,  14}, {5, -16}, {5,  17}, {5, -19},
+    },
+    { // --- 6 ---
+      {5,  -1}, {5,   2}, {5,   3}, {5,   4},
+      {5,   5}, {5,  -7}, {5,   8}, {5, -10},
+      {5,  11}, {5,  12}, {5, -14}, {5,  15},
+      {5,  16}, {5, -18}, {5,  19}, {0, -19},
+    },
+    { // --- 7 ---
+      {5,  -1}, {5,   2}, {5,   3}, {5,   4},
+      {5,   5}, {5,  -7}, {5,   8}, {5, -10},
+      {5,  11}, {5,  12}, {5, -14}, {5,  15},
+      {5,  16}, {5, -18}, {5,  19}, {1, -19},
+    }
+  };
+
+  private static int[][][][] kGroup6CellsInv = buildGroup6Cell20sInv();
+
+  private static int[][][][] buildGroup6Cell20sInv() {
+    int[][][][] result = new int[5][6][20][2];
+    for (int ir = 0; ir < 5; ir++) {
+      for (int ig = 0; ig < 6; ig++) {
+        for (int ic = 0; ic < 20; ic++) {
+          result[ir][ig][ic][0] = -1;
+          result[ir][ig][ic][1] = -1;
+        }
+      }
+    }
+    for (int x = 0; x < 16; x++) {
+      for (int y = 0; y < 24; y++) {
+        int index = (16 * y) + x;
+        int region5 = kRegion5s[(x / 4) + 4 * (y / 4)];
+        int[] group6AndCell20 = getGroup6AndCell20(x, y);
+        int group6 = group6AndCell20[0];
+        int cell20 = group6AndCell20[1];
+        int[][] cells = result[region5][group6];
+        if (cell20 < 0) {
+          cells[-cell20][0] = index;
+          cells[-cell20][1] = 0;
+          cells[-cell20 - 1][0] = index;
+          cells[-cell20 - 1][1] = 1;
+        } else {
+          cells[cell20][0] = index;
+          cells[cell20][1] = 0;
+        }
+      }
+    }
+    return result;
+  }
+
+  private static long getLevel7Middle(long scalar, int chunkZoom) {
+    if (chunkZoom == 7)
+      return scalar;
+    int zoomDelta = 7 - chunkZoom;
+    // First get the index-3 child since its top left corner is the center of
+    // the chunk.
+    long middleChild = 4 * scalar + 3;
+    // Then multiply it by any remaining zoom levels to get the zoom-7 quad.
+    // Just scalaing up will converge to the top left corner which is the
+    // middle of the original quad.
+    return middleChild * (1 << ((zoomDelta - 1) << 1));
+  }
+
+  private static int[] getGroup6AndCell20(int x, int y) {
+    int group6Shape = kGroup6Shape[y / 4][x / 4];
+    return kGroup6ShapeCell20s[group6Shape][(x % 4) + 4 * (y % 4)];
+  }
+
+  static ChunkString getChunkString(long chunk, int chunkZoom) {
+    assert 0 <= chunk && chunk < getZoomBias(8);
+    // Get the scalar of the quad at zoom level 7 that contains the center of
+    // the chunk.
+    int zoomDelta = 7 - chunkZoom;
+    long scalar = quadToScalar(chunk, chunkZoom);
+    boolean isZoomed = (zoomDelta > 0);
+    if (isZoomed)
+      scalar = getLevel7Middle(scalar, chunkZoom);
+    assert 0 <= scalar && scalar <= (1 << 14);
+    // Now we've got a scalar at level 7. Convert it to an (x, y) coordinate in
+    // [128 x 128].
+    long x = compact64To32(scalar);
+    long y = compact64To32(scalar >> 1);
+    long xm4 = x;
+    long ym4 = y;
+    assert 0 <= x && x < 128;
+    assert 0 <= y && y < 128;
+    // Which half (top/bottom)?
+    boolean isEastern = (x >= 64);
+    if (isEastern)
+      x -= 64;
+    long xm3 = x;
+    long ym3 = y;
+    assert 0 <= x && x < 64;
+    // Which of the six sections?
+    long section6 = (y / 44) * 2 + (x / 32);
+    long xm2 = (x = x % 32);
+    long ym2 = (y = y % 44);
+    // Which of the four region blocks?
+    long block4 = (x / 16) + (y / 24) * 2;
+    long xm1 = (x = x % 16);
+    long ym1 = (y = y % 24);
+    int cellIndex = (int) (16 * y + x);
+    // System.out.println("> [" + cellIndex + "] " + blockX + " " + blockY + " " + detailsIndex + " " + isZoomed);
+    // Which of the 24 group4 blocks?
+    int group5Block24 = (int) ((x / 4) + 4 * (y / 4));
+    int region5 = kRegion5s[group5Block24];
+    int[] group6AndCell20 = getGroup6AndCell20((int) x, (int) y);
+    int group6 = group6AndCell20[0];
+    int cell20 = group6AndCell20[1];
+    if (cell20 < 0) {
+      cell20 = (isZoomed ? -1 : 0) - cell20;
     } else {
-      active = CONSONANTS;
-      passive = VOWELS;
-      current -= 11664;
+      assert !isZoomed;
     }
-    for (int i = 0; i < 4; i++) {
-      result = active.charAt(current % active.length()) + result;
-      current = current / active.length();
-      String tmp = active;
-      active = passive;
-      passive = tmp;
-    }
-    assert current == 0;
+    ChunkString result = new ChunkString(isEastern, (int) section6, (int) block4,
+        region5, group6, cell20);
+    result.cellIndexOrig = cellIndex;
+    result.xm1 = xm1;
+    result.ym1 = ym1;
+    result.xm2 = xm2;
+    result.ym2 = ym2;
+    result.xm3 = xm3;
+    result.ym3 = ym3;
+    result.xm4 = xm4;
+    result.ym4 = ym4;
+    result.isZoomed = isZoomed;
+    result.scalar = scalar;
+    result.zoomDelta = zoomDelta;
+    result.chunk = chunk;
     return result;
   }
 
   public static String toString(long quad) {
+    return toString(quad, getZoomLevel(quad));
+  }
+
+  public static String toString(long quad, int zoom) {
     String result = "";
     long current = quad;
+    int currentZoom = zoom;
     do {
-      int zoomRemaining = ZQuad.getZoomLevel(current);
-      int zoomChunkSize = Math.min(zoomRemaining, 7);
-      if (zoomChunkSize == 7 && (zoomRemaining % 7) != 0)
-        zoomChunkSize = zoomRemaining % 7;
-      int chunk = (int) ZQuad.getDescendancy(current, zoomChunkSize);
-      current = ZQuad.getAncestor(current, zoomChunkSize);
-      result = chunkToString(chunk) + " " + result;
+      int nextChunkZoom = (currentZoom % 7 == 0)
+          ? Math.min(currentZoom, 7)
+          : (currentZoom % 7);
+      long nextChunk = ZQuad.getDescendancy(current, nextChunkZoom);
+      current = ZQuad.getAncestor(current, nextChunkZoom);
+      currentZoom -= nextChunkZoom;
+      if (result.length() > 0)
+        result = "-" + result;
+      result = getChunkString(nextChunk, nextChunkZoom) + result;
     } while (current > 0);
     return result;
+  }
+
+  private static boolean isVowel(char c) {
+    return VOWELS.indexOf(c) != -1;
+  }
+
+  private static boolean isConsonant(char c) {
+    return CONSONANTS.indexOf(c) != -1;
+  }
+
+  public static ChunkString parseChunkString(String str) {
+    if (str.length() != 4)
+      return null;
+    // Extract the characters depending on the order.
+    boolean isEastern = isConsonant(str.charAt(0));
+    int cOffset = (isEastern ? 0 : 1);
+    int vOffset = 1 - cOffset;
+    char c0 = str.charAt(cOffset);
+    char v0 = str.charAt(vOffset);
+    char c1 = str.charAt(cOffset + 2);
+    char v1 = str.charAt(vOffset + 2);
+    if (!(isVowel(v0) && isConsonant(c0) && isVowel(v1) && isConsonant(c1)))
+      return null;
+    int ic0 = CONSONANTS.indexOf(c0);
+    int ic1 = CONSONANTS.indexOf(c1);
+    int iv0 = VOWELS.indexOf(v0);
+    int iv1 = VOWELS.indexOf(v1);
+    // Decode the characters into the corresponding values.
+    int sector6 = iv0;
+    int block4 = ic0 / 5;
+    int region5 = ic0 % 5;
+    int group6 = iv1;
+    int cell20 = ic1;
+    return new ChunkString(isEastern, sector6, block4, region5, group6, cell20);
   }
 
   public static int hashCode(long value) {

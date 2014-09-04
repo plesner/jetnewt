@@ -1,6 +1,12 @@
 package com.jetnewt.geo;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import junit.framework.TestCase;
+
+import com.jetnewt.console.Console;
+import com.jetnewt.console.PlanktonObject;
 /**
  * Tests for {@link Arc}.
  */
@@ -117,6 +123,9 @@ public class ArcTest extends TestCase {
 
   public void testPointArcs() {
     CoordinateConverter globalMap = CoordinateConverter.global();
+    Place place = Place.fromWgs84(new GeoLatLng(56.15, 10.216667)).toZoom(9);
+    long x = (long) (place.getUnitMiddle().getUnitLat() * (1L << 26));
+    long y = (long) (place.getUnitMiddle().getUnitLng() * (1L << 26));
     OrdinateConverter latMap = globalMap.getLatMap();
     OrdinateConverter lngMap = globalMap.getLngMap();
     for (Position pos : kAllPositions) {
@@ -124,6 +133,29 @@ public class ArcTest extends TestCase {
       checkConversion(latMap, pos.dec.getGeoLat(), dms.degLat, dms.minLat, dms.secLat, dms.isNorth);
       checkConversion(lngMap, pos.dec.getGeoLng(), dms.degLng, dms.minLng, dms.secLng, dms.isEast);
     }
+  }
+
+  private static boolean matches(String pattern, String str) {
+    for (int i = 0; i < 4; i++) {
+      if (pattern.charAt(i) != '.' && pattern.charAt(i) != str.charAt(i))
+        return false;
+    }
+    return true;
+  }
+
+  public void testDump() {
+    System.out.println(ZQuad.toString(Place.fromWgs84(kAarhus.dec).getQuad()));
+    List<Place> places = new ArrayList<Place>();
+    long start = ZQuad.getZoomBias(7);
+    long end = ZQuad.getZoomBias(8);
+    for (long quad = start; quad < end; quad++) {
+      String str = ZQuad.getChunkString(quad, ZQuad.getZoomLevel(quad)).toString();
+      if (matches("oxxx", str))
+        places.add(Place.fromQuad(quad));
+    }
+    System.out.println("Selected " + places.size() + " quads.");
+    Console.println(new PlanktonObject("geo.Map")
+      .setField("elements", places));
   }
 
 }
