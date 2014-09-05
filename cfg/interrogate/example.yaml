@@ -1,5 +1,5 @@
-# How many requests to the backend are allowed per second? Keep this low until
-# it's clear how many they consider acceptable.
+# How many requests to the backend are allowed per second? 10 QPS is what I've
+# cleared with them so don't increase it past that level.
 reqs_per_sec: 10
 
 # How large a backlog of request permits are we allowed to accumulate. Also keep

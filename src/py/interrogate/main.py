@@ -259,8 +259,8 @@ class Interrogate(object):
     if cache_key in self.transit_cache:
       return self.transit_cache[cache_key]
     date = self.config.get_date()
-    start = clock.Timestamp.from_date_time(date, "10:00")
-    end = clock.Timestamp.from_date_time(date, "12:00")
+    start = clock.Timestamp.from_date_time(date, "00:00")
+    end = clock.Timestamp.from_date_time(date, "23:59")
     result = self._fetch_transits_within(type, id, start, end).then(self._merge_transits)
     self.transit_cache[cache_key] = result
     return result
