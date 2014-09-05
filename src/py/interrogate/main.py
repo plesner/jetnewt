@@ -85,6 +85,9 @@ class Config(object):
   def get_max_accum(self):
     return self._get_setting("max_accum", 4)
 
+  def get_parallelism(self):
+    return self._get_setting("parallelism", 1)
+
   def get_rest_base_url(self):
     return self._get_setting("rest_base_url", None)
 
@@ -115,6 +118,7 @@ class Config(object):
     _LOG.info("reqs per sec: %s", self.get_reqs_per_sec())
     _LOG.info("max accum: %s", self.get_max_accum())
     _LOG.info("rest base url: %s", self.get_rest_base_url())
+    _LOG.info("parallelism: %s", self.get_parallelism())
     _LOG.info("http cache: %s", self.get_http_cache())
     _LOG.info("http user agent: %s", self.get_http_user_agent())
     for hub in self.get_hubs():
@@ -167,7 +171,15 @@ class Interrogate(object):
     try:
       self._run()
     finally:
+      self._print_stats()
       self._close()
+
+  def _print_stats(self):
+    stats = self.service.get_backend_stats()
+    if stats is None:
+      return
+    reqs_per_sec = stats["reqs_per_sec"]
+    _LOG.info("average backend qps: %s" % reqs_per_sec)
 
   def _build_option_parser(self):
     parser = argparse.ArgumentParser()
@@ -177,6 +189,8 @@ class Interrogate(object):
       help="Max number of requests that can be issued per second (default: 0.1)")
     parser.add_argument("--max_accum", type=float,
       help="Max number of request permits that may accumulate (default: 4)")
+    parser.add_argument("--parallelism", type=int,
+      help="Max number of simultaneour requests to the backend (default: 1)")
     parser.add_argument("--rest-base-url", type=str,
       help="The base url of the rest api")
     parser.add_argument("--http-cache", type=str,
@@ -191,7 +205,12 @@ class Interrogate(object):
   def _run(self):
     self.config.log_values()
     done_p = self._build_pipeline()
-    self.scheduler.run_all_tasks()
+    while True:
+      self.scheduler.run_all_tasks()
+      if done_p.is_resolved():
+        break
+      else:
+        time.sleep(0.1)
     print done_p.get_error_trace()
     print done_p.get()[0]
     print "Processed: %s" % ", ".join(sorted(self.routes_processed))
@@ -370,17 +389,16 @@ class Interrogate(object):
   # Creates and returns the underlying rest service wrapper.
   def _new_service(self):
     base_url = self.config.get_rest_base_url()
-    reqs_per_sec = self.config.get_reqs_per_sec()
-    max_accum = self.config.get_max_accum()
     http_cache = self.config.get_http_cache()
     http_user_agent = self.config.get_http_user_agent()
     return rejseplanen.Rejseplanen(
-      base_url,
+      self.config.get_rest_base_url(),
       self.scheduler,
       http_cache=http_cache,
       http_user_agent=http_user_agent,
-      reqs_per_sec=reqs_per_sec,
-      max_accum=max_accum)
+      reqs_per_sec=self.config.get_reqs_per_sec(),
+      max_accum=self.config.get_max_accum(),
+      parallelism=self.config.get_parallelism())
 
   def _close(self):
     self.service.close()

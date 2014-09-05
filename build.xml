@@ -1,0 +1,37 @@
+<project name="jetnewt" default="test" basedir=".">
+
+  <property name="out.dir" location="out"/>
+  <property name="src.dir" location="src/java"/>
+  <property name="test.dir" location="test/java"/>
+  <property name="junit.out.dir" location="${out.dir}/junit"/>
+
+  <target name="init">
+    <mkdir dir="${out.dir}"/>
+  </target>
+
+  <target name="src.build" depends="init">
+    <javac includeantruntime="false" srcdir="${src.dir}" destdir="${out.dir}"/>
+  </target>
+
+  <target name="test.build" depends="src.build">
+    <javac includeantruntime="false" srcdir="${test.dir}" destdir="${out.dir}">
+      <classpath>
+        <path location="${ant.home}/lib/junit.jar"/>
+      </classpath>
+    </javac>
+  </target>
+
+  <target name="test" depends="test.build">
+    <mkdir dir="${junit.out.dir}"/>
+    <junit printsummary="false" showoutput="false" haltonfailure="true">
+      <classpath>
+        <path location="${out.dir}"/>
+      </classpath>
+      <formatter type="brief" usefile="false"/>
+      <batchtest fork="yes" todir="${junit.out.dir}">
+        <fileset dir="${test.dir}" includes="**/*Test.java"/>
+      </batchtest>
+    </junit>
+  </target>
+
+</project>

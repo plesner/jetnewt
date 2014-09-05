@@ -1,0 +1,36 @@
+# How many requests to the backend are allowed per second? Keep this low until
+# it's clear how many they consider acceptable.
+reqs_per_sec: 10
+
+# How large a backlog of request permits are we allowed to accumulate. Also keep
+# this low.
+max_accum: 4
+
+# What's the max number of simultaneous requests to the backend allowed, subject
+# to the QPS rate limit?
+parallelism: 8
+
+# File to store the persistent cache in.
+http_cache: httpcache.db
+
+# Better tell them who they're talking to.
+http_user_agent: "interrogate.py (code: http://github.com/plesner/jetnewt, contact: c7n@p5r.org)"
+
+# Date to fetch data for.
+date: 01.10.14
+
+# The hubs to seed the process with. The process needs to determine for each
+# route name what the start- and endpoints are. It does this by fetching the
+# arrivals and departures boards for these hubs and then using the start and
+# end stations for all trips that pass through them. So you want a few highly
+# connected stops here that between them occur on all the routes we're trying
+# to cover.
+hubs:
+ - Århus rtb.
+
+route_whitelist:
+# Bybusser
+ - "Bus [1-6]A"
+ - "Bus 1[1-9]"
+ - "Bus 20"
+ - "Bus 3[1235]"

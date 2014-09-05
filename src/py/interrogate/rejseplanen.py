@@ -340,17 +340,21 @@ class LocationRepository(object):
 class Rejseplanen(object):
 
   def __init__(self, root, scheduler, http_cache, http_user_agent, reqs_per_sec,
-      max_accum):
+      max_accum, parallelism):
     self.scheduler = scheduler
     self.root = root
     self.http = http.HttpProxy(scheduler, cache=http_cache,
-      user_agent=http_user_agent, reqs_per_sec=reqs_per_sec, max_accum=max_accum)
+      user_agent=http_user_agent, reqs_per_sec=reqs_per_sec, max_accum=max_accum,
+      pool_size=parallelism)
     self.location_repo = LocationRepository(scheduler, self)
     self.journey_cache = {}
 
   # Returns the full rest api path given an endpoint.
   def get_request_path(self, endpoint):
     return "%s/%s" % (self.root, endpoint)
+
+  def get_backend_stats(self):
+    return self.http.get_stats()
 
   # Issues the given request.
   def fetch(self, request):
