@@ -108,7 +108,7 @@ class Scheduler(object):
     while self.has_more_tasks():
       self.run_next_task()
       tasks += 1
-      if (tasks % 100) == 0:
+      if (tasks % 1000) == 0:
         pending = self.thunks.qsize()
         _LOG.info("Has run %i tasks. Currently pending %i.", tasks, pending)
 
@@ -158,9 +158,11 @@ class Promise(object):
 
   # If this promise has not yet been resolved fails it an schedules any waiting
   # tasks to be scheduled for failure.
-  def fail(self, error, trace):
+  def fail(self, error, trace=None):
     if self.is_resolved():
       return
+    if trace is None:
+      trace = traceback.format_exc()
     self.state = Promise._FAILED
     self.value = (error, trace)
     waiters = self.waiters

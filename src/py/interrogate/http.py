@@ -248,45 +248,72 @@ class HttpProxy(object):
   def _fetch_url_from_backend(self, url):
     self.in_flight_lock.acquire()
     try:
-      return self._fetch_url_from_backend_unsafe(url)
+      return self._submit_fetch_url_from_backend(url)
     finally:
       self.in_flight_lock.release()
 
   # Does the work of fetching from the backend assuming that the in-flight lock
   # is held by the current thread. 
-  def _fetch_url_from_backend_unsafe(self, url):
+  def _submit_fetch_url_from_backend(self, url):
     in_flight = self.in_flight.get(url, None)
     if not in_flight is None:
       # There is already a request for the given url in flight so just use that
       # value.
       return in_flight
-    def do_fetch_url():
-      # Wait for the rate limiter to give permission.
-      self.limiter.wait_for_permit()
-      thread_name = threading.current_thread().name
-      _LOG.info("Backend [%s]: %s" % (thread_name, url))
-      # Build and send the request.
-      request = urllib2.Request(url)
-      request.add_header("User-Agent", self.user_agent)
-      timestamp = get_current_time_millis()
-      response = urllib2.urlopen(request)
-      raw_result = response.read()
-      decoded_result = raw_result.decode("utf8")
-      # Propagate and cache the result.
-      result.fulfill(unicode(decoded_result))
-      self.cache.add_response(timestamp, url, decoded_result)
-      # Remove this from the set of requests in flight.
-      self.in_flight_lock.acquire()
-      try:
-        self.launch_times.add(timestamp)
-        del self.in_flight[url]
-      finally:
-        self.in_flight_lock.release()
-    # Launch a new request.
     result = self.scheduler.new_promise()
+    # Launch a new request.
     self.in_flight[url] = result
-    self.thread_pool.submit(do_fetch_url)
+    self.thread_pool.submit(lambda: self._do_fetch_url_from_backend(result, url))
     return result
+
+  # If a request fails try again a few times before killing the whole process.
+  # It's intended to run unsupervised so it's better to be patient than give
+  # up and abort the whole process early.
+  RETRY_SCHEDULE = [
+    10,  # 10s
+    30,  # 30s
+    600, # 10m
+    3600 # 1h
+  ]
+  def _do_fetch_url_from_backend(self, result, url):
+    # Wait for the rate limiter to give permission.
+    self.limiter.wait_for_permit()
+    thread_name = threading.current_thread().name
+    _LOG.info("Backend [%s]: %s" % (thread_name, url))
+    # Build and send the request.
+    request = urllib2.Request(url)
+    request.add_header("User-Agent", self.user_agent)
+    timestamp = get_current_time_millis()
+    tries = 1
+    while True:
+      try:
+        response = urllib2.urlopen(request)
+        raw_result = response.read()
+        break
+      except IOError, e:
+        _LOG.warning("Error: %s", e)
+        if tries <= len(HttpProxy.RETRY_SCHEDULE):
+          # Wait a bit then try again.
+          delay = HttpProxy.RETRY_SCHEDULE[tries - 1]
+          _LOG.info("Waiting %ss before retrying", delay)
+          time.sleep(delay)
+          tries += 1
+        else:
+          # We've retried as much as the schedule allows, it's time to give up.
+          result.fail(e)
+          return
+    decoded_result = raw_result.decode("utf8")
+    # Propagate and cache the result.
+    result.fulfill(unicode(decoded_result))
+    self.cache.add_response(timestamp, url, decoded_result)
+    # Remove this from the set of requests in flight.
+    self.in_flight_lock.acquire()
+    try:
+      self.launch_times.add(timestamp)
+      del self.in_flight[url]
+    finally:
+      self.in_flight_lock.release()
+
 
   def get_stats(self):
     if len(self.launch_times) < 2:
