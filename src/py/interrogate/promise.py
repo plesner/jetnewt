@@ -1,6 +1,7 @@
 import Queue
 import traceback
 import logging
+import collections
 
 
 logging.basicConfig(level=logging.INFO)
@@ -207,6 +208,35 @@ class Promise(object):
         result_ps.append(result_p)
       return self.scheduler.join(result_ps)
     return self.then(do_map)
+
+  # This must be a promise for a dictionary from keys to promises. Returns a new
+  # promise for a dictionary in the same order as the input that maps keys to
+  # the resolved values of the promises in the input dict.
+  def map_dict(self, fun):
+    def do_map_dict(dict):
+      # Extract the items from the dict to fix the order.
+      items = list(dict.items())
+      # Grab the keys.
+      (keys, _) = zip(*items)
+      result_ps = []
+      # For each value make a promise for the result of mapping using the map
+      # function.
+      for (key, value) in items:
+        if type(value) is Promise:
+          value_p = value
+        else:
+          value_p = self.scheduler.value(value)
+        # Rage!
+        def make_mapper(k):
+          return lambda v: fun(k, v)
+        result_p = value_p.then(make_mapper(key))
+        result_ps.append(result_p)
+      # Wait for all the mappings to be done and then zip the array of results
+      # back up.
+      def zip_map_dict_result(values):
+        return collections.OrderedDict(zip(keys, values))
+      return self.scheduler.join(result_ps).then(zip_map_dict_result)
+    return self.then(do_map_dict)
 
   # Returns the value of this promise if it has been fulfilled, throws its error
   # if it has failed, and throws and UnresolvedPromise error if it hasn't been

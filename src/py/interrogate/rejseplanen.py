@@ -178,33 +178,42 @@ class Departure(AbstractTransit):
 # built really, the url to use is given in the response of another request.
 class JourneyRequest(object):
 
-  def __init__(self, url):
+  def __init__(self, url, transit):
     self.url = url
+    self.transit = transit
 
   def get_http_request(self, service):
     return http.HttpRequest(self.url)
 
   def process_response(self, url, xml):
-    return JourneyResponse(url, xml)
+    return JourneyResponse(url, self.transit, xml)
 
 
 class JourneyResponse(object):
 
-  def __init__(self, source_url, xml):
+  def __init__(self, source_url, transit, xml):
     self.source_url = source_url
+    self.transit = transit
     self.route_name = xml.find("JourneyName").get("name")
-    self.journey_stops = tuple(map(JourneyStop, xml.findall("Stop")))
+    self.stops = map(self._wrap_stop, xml.findall("Stop"))
+
+  def get_transit(self):
+    return self.transit
 
   def get_route_name(self):
     return self.route_name
 
-  def get_journey_stops(self):
-    return self.journey_stops
+  def get_stops(self):
+    return self.stops
+
+  def _wrap_stop(self, xml):
+    return JourneyStop(self, xml)
 
 
 class JourneyStop(object):
 
-  def __init__(self, xml):
+  def __init__(self, journey, xml):
+    self.journey = journey
     self.name = xml.get("name")
     self.arr_date = xml.get("arrDate", None)
     self.arr_time = xml.get("arrTime", None)
@@ -217,7 +226,10 @@ class JourneyStop(object):
     if not (self.dep_date is None or self.dep_time is None):
       self.departure = clock.Timestamp.from_date_time(self.dep_date, self.dep_time)
 
-  def get_stop_name(self):
+  def get_route_name(self):
+    return self.journey.get_route_name()
+
+  def get_name(self):
     return self.name
 
   def get_arrival(self):
@@ -387,10 +399,11 @@ class Rejseplanen(object):
       assert type == DEPARTURES
       return self.get_departures(id, timestamp)
 
-  def get_journey(self, url):
+  def get_journey(self, transit):
+    url = transit.get_journey_url()
     if url in self.journey_cache:
       return self.journey_cache[url]
-    result = self.fetch(JourneyRequest(url))
+    result = self.fetch(JourneyRequest(url, transit))
     self.journey_cache[url] = result
     return result
 

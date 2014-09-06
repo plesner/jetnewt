@@ -62,6 +62,7 @@ import argparse
 import yaml
 import rejseplanen
 import clock
+import collections
 
 
 logging.basicConfig(level=logging.INFO)
@@ -100,6 +101,12 @@ class Config(object):
   def get_date(self):
     return self._get_setting("date", None)
 
+  def get_time_range_start(self):
+    return self._get_subsetting("time_range", "start", None)
+
+  def get_time_range_end(self):
+    return self._get_subsetting("time_range", "end", None)
+
   def get_hubs(self):
     return self.config.get("hubs")
 
@@ -113,6 +120,13 @@ class Config(object):
     else:
       return self.vars[name]
 
+  def _get_subsetting(self, name, subname, default=None):
+    var = self.vars["%s_%s" % (name, subname)]
+    if not var is None:
+      return var
+    members = self.config.get(name, {})
+    return members.get(subname, default)
+
   # Info log all the config settings.
   def log_values(self):
     _LOG.info("reqs per sec: %s", self.get_reqs_per_sec())
@@ -121,6 +135,8 @@ class Config(object):
     _LOG.info("parallelism: %s", self.get_parallelism())
     _LOG.info("http cache: %s", self.get_http_cache())
     _LOG.info("http user agent: %s", self.get_http_user_agent())
+    _LOG.info("date: %s" % self.get_date())
+    _LOG.info("time range: %s - %s" % (self.get_time_range_start(), self.get_time_range_end()))
     for hub in self.get_hubs():
       _LOG.info("- hub: %s", hub)
 
@@ -132,6 +148,10 @@ class Config(object):
       raise AssertionError("No date specified")
     if self.get_hubs() is None:
       raise AssertionError("No hubs specified")
+    if self.get_time_range_start() is None:
+      raise AssertionError("No time range start specified")
+    if self.get_time_range_end() is None:
+      raise AssertionError("No time range end specified")
 
   # Parses and returns the yaml config.
   def _parse_config(self, filename):
@@ -151,6 +171,58 @@ class StringFilter(object):
         return True
     return False
 
+
+# A collection of information about a route.
+class RouteInfo(object):
+
+  def __init__(self, name, departure_journeys, arrival_journeys):
+    self.name = name
+    self.departure_journeys = departure_journeys
+    self.arrival_journeys = arrival_journeys
+
+  # Returns a list of the journeys that can be verified as covering the complete
+  # route.
+  def get_verified_journeys(self):
+    def get_stop_key(stop, timestamp):
+      stop_name = stop.get_name()
+      return (stop_name, timestamp)
+    journey_map = {}
+    joint_journeys = [
+      (True, self.departure_journeys),
+      (False, self.arrival_journeys)
+    ]
+    # Scan through all the journeys, for arrivals and departures, and collect
+    # all the identical ones. This keys on just the start and end stops, it
+    # should be safe to assume that you won't see two busses with the same
+    # name leaving the same place at the same time, and arriving at the same
+    # different place at the same time, but taking different paths.
+    for (is_depart, journeys) in joint_journeys:
+      for journey in journeys:
+        transit = journey.get_transit()
+        first = journey.get_stops()[0]
+        first_key = get_stop_key(first, first.get_departure())
+        last = journey.get_stops()[-1]
+        last_key = get_stop_key(last, last.get_arrival())
+        key = (first_key, last_key)
+        if not key in journey_map:
+          journey_map[key] = []
+        journey_map[key].append((is_depart, journey))
+    # Scan through all the pairs to find the ones that have been hit by both an
+    # arrival and a departure. Arrivals and departures each fix one terminus but
+    # not the other and if we have two together that take the same path then
+    # we've got both terminuses fixed and the route is valid.
+    verified = {}
+    unverified = {}
+    for (key, hits) in journey_map.items():
+      # Zip out the is_depart and journey element of each pair and make a set of
+      # the is_departs. If the set has two elements then it must contain True
+      # and False which means that we've seen the same journey from both ends.
+      (is_departs, journeys) = zip(*hits)
+      if len(set(is_departs)) == 2:
+        verified[key] = journeys
+      else:
+        unverified[key] = journeys
+    return (verified, unverified)
 
 # The main class that sets up the interrogation pipeline.
 class Interrogate(object):
@@ -199,6 +271,10 @@ class Interrogate(object):
       help="The user agent string to use in backend requests (default: chrome's)")
     parser.add_argument("--date", type=str,
       help="The date to fetch plans for")
+    parser.add_argument("--time-range-start", type=str,
+      help="The beginning of the time range to cover")
+    parser.add_argument("--time-range-end", type=str,
+      help="The end of the time range to cover")
     return parser
 
   # Set up the pipeline, then run it.
@@ -212,7 +288,7 @@ class Interrogate(object):
       else:
         time.sleep(0.1)
     print done_p.get_error_trace()
-    print done_p.get()[0]
+    print done_p.get()
     print "Processed: %s" % ", ".join(sorted(self.routes_processed))
     print "Ignored: %s" % ", ".join(sorted(self.routes_ignored))
 
@@ -226,16 +302,18 @@ class Interrogate(object):
     # stations).
     starts_p = hub_arrivals_p.then(self._extract_terminuses)
     ends_p = hub_departures_p.then(self._extract_terminuses)
-    all_terminuses_p = self.scheduler.join([starts_p, ends_p])   
+    all_terminuses_p = self.scheduler.join([starts_p, ends_p])
     # Join the starts and ends together for each route.
     route_terminuses_p = all_terminuses_p.then(self._join_route_terminuses)
     # Fetch the departures and arrivals for all the terminuses.
-    terminus_boards_p = route_terminuses_p.map(self._fetch_terminus_boards)
+    terminus_boards_p = route_terminuses_p.map_dict(self._fetch_terminus_boards)
     # For each transit at a terminus of a route we're interested in, fetch the
-    # details.
-    terminus_transit_details_p = terminus_boards_p.map(self._fetch_terminus_board_journeys)
+    # journey details.
+    journeys_p = terminus_boards_p.map_dict(self._fetch_terminus_board_journeys)
+    # For each route bundle all the information we've fetched up in an object.
+    routes_p = journeys_p.map_dict(self._bundle_route)
 
-    return terminus_transit_details_p
+    return routes_p
 
   # Given the name of a stop, fetches the full departure board for that stop.
   def _fetch_departures_by_name(self, name):
@@ -259,8 +337,10 @@ class Interrogate(object):
     if cache_key in self.transit_cache:
       return self.transit_cache[cache_key]
     date = self.config.get_date()
-    start = clock.Timestamp.from_date_time(date, "00:00")
-    end = clock.Timestamp.from_date_time(date, "23:59")
+    range_start = self.config.get_time_range_start()
+    range_end = self.config.get_time_range_end()
+    start = clock.Timestamp.from_date_time(date, range_start)
+    end = clock.Timestamp.from_date_time(date, range_end)
     result = self._fetch_transits_within(type, id, start, end).then(self._merge_transits)
     self.transit_cache[cache_key] = result
     return result
@@ -321,7 +401,7 @@ class Interrogate(object):
   # that route name. Note that this gives you only one side, either starts or
   # stops.
   def _extract_terminuses(self, all_transits):
-    result = {}
+    result = collections.OrderedDict()
     for hub_transits in all_transits:
       for transit in hub_transits:
         route_name = transit.get_route_name()
@@ -332,7 +412,7 @@ class Interrogate(object):
 
   # Given two maps of terminuses, one from route names to starts and one from
   # route names to ends, matches the starts and ends together for each route and
-  # returns a list of (route_name, starts, ends) tuples.
+  # returns a mapping from route_name to (starts, ends) tuples.
   def _join_route_terminuses(self, input):
     (starts, ends) = input
     start_routes = set(starts.keys())
@@ -340,62 +420,62 @@ class Interrogate(object):
     for route in start_routes.difference(end_routes):
       _LOG.warn("Route '%s' has start but no end." % route)
     for route in end_routes.difference(start_routes):
-      _LOG.warn("Route '%s' has end but start." % route)
+      _LOG.warn("Route '%s' has end but no start." % route)
     all_routes = sorted(start_routes.union(end_routes))
-    return [(r, starts.get(r, []), ends.get(r, [])) for r in all_routes]
+    result = collections.OrderedDict()
+    for route_name in sorted(start_routes.intersection(end_routes)):
+      route_starts = starts.get(route_name, [])
+      route_ends = ends.get(route_name, [])
+      result[route_name] = (route_starts, route_ends)
+    return result
 
-  # Given a (route_name, starts, ends) tuple returns a promise for the transit
-  # board for all the terminuses: departures for the starts and arrivals for the
-  # ends. The result is a promise for a tuple containing (route_name,
-  # departures, arrivals).
-  def _fetch_terminus_boards(self, input):
-    (route_name, starts, ends) = input
+  # Given a route name and a (starts, ends) tuple returns a promise for the
+  # transit board for all the terminuses: departures for the starts and arrivals
+  # for the ends. The result is a promise for a tuple containing (departures,
+  # arrivals).
+  def _fetch_terminus_boards(self, route_name, input):
+    (starts, ends) = input
     # Fetch departures for all the start points.
     departures_p = self.scheduler.join(map(self._fetch_departures_by_name, starts))
     arrivals_p = self.scheduler.join(map(self._fetch_arrivals_by_name, ends))
-    def wrap_up_result(input):
-      (departures, arrivals) = input
-      return (route_name, departures, arrivals)
-    return self.scheduler.join([departures_p, arrivals_p]).then(wrap_up_result)
+    return self.scheduler.join([departures_p, arrivals_p])
 
-  # Given a (route_name, departure boards, arrival boards) tuple, fetches the
-  # journey details for all the transit board transits of the route. The result
-  # is a promise for a mapping from journeys to transits where each 
-  def _fetch_terminus_board_journeys(self, input):
-    (route_name, departures, arrivals) = input
+  # Given a route name and a (departure boards, arrival boards) tuple, fetches
+  # the journey details for all the transit board transits of the route. The
+  # result is a pair or (departure journeys, arrival journeys) matching the
+  # input lists.
+  def _fetch_terminus_board_journeys(self, route_name, input):
+    (departures, arrivals) = input
+    # Filter out the transits that don't involve the route we're interested
+    # in.
     def fetch_filtered_journeys(all_transits):
       all_journeys_ps = []
       for terminus_transits in all_transits:
         for transit in terminus_transits:
           if transit.get_route_name() != route_name:
             continue
-          journey_p = self.service.get_journey(transit.get_journey_url())
-          transit_with_journey_p = journey_p.then(lambda journey: (transit, journey))
-          all_journeys_ps.append(transit_with_journey_p)
+          journey_p = self.service.get_journey(transit)
+          all_journeys_ps.append(journey_p)
       return self.scheduler.join(all_journeys_ps)
-    def map_journeys_to_transits(all_transits):
-      result = {}
-      for terminus_transits in all_transits:
-        for (transit, journey) in terminus_transits:
-          if not journey in result:
-            result[journey] = []
-          result[journey].append(transit)
-      return result
     departure_journeys_p = fetch_filtered_journeys(departures)
     arrival_journeys_p = fetch_filtered_journeys(arrivals)
-    all_journeys_p = self.scheduler.join([departure_journeys_p, arrival_journeys_p])
-    return all_journeys_p.then(map_journeys_to_transits)
+    return self.scheduler.join([departure_journeys_p, arrival_journeys_p])
+
+  def _bundle_route(self, route_name, input):
+    (departure_journeys, arrival_journeys) = input
+    result = RouteInfo(route_name, departure_journeys, arrival_journeys)
+    (verified, unverified) = result.get_verified_journeys()
+    vs = len(verified)
+    us = len(unverified)
+    return "%s ~ %s (%s)" % (vs, us, int((100.0 * vs) / (vs + us)))
 
   # Creates and returns the underlying rest service wrapper.
   def _new_service(self):
-    base_url = self.config.get_rest_base_url()
-    http_cache = self.config.get_http_cache()
-    http_user_agent = self.config.get_http_user_agent()
     return rejseplanen.Rejseplanen(
       self.config.get_rest_base_url(),
       self.scheduler,
-      http_cache=http_cache,
-      http_user_agent=http_user_agent,
+      http_cache=self.config.get_http_cache(),
+      http_user_agent=self.config.get_http_user_agent(),
       reqs_per_sec=self.config.get_reqs_per_sec(),
       max_accum=self.config.get_max_accum(),
       parallelism=self.config.get_parallelism())

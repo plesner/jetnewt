@@ -279,7 +279,6 @@ class HttpProxy(object):
     # Wait for the rate limiter to give permission.
     self.limiter.wait_for_permit()
     thread_name = threading.current_thread().name
-    _LOG.info("Backend [%s]: %s" % (thread_name, url))
     # Build and send the request.
     request = urllib2.Request(url)
     request.add_header("User-Agent", self.user_agent)
@@ -287,11 +286,12 @@ class HttpProxy(object):
     tries = 1
     while True:
       try:
+        _LOG.info("Backend [%s/%s]: %s" % (thread_name, tries, url))
         response = urllib2.urlopen(request)
         raw_result = response.read()
         break
       except IOError, e:
-        _LOG.warning("Error: %s", e)
+        _LOG.warning("Error [%s/%s]: %s", thread_name, tries, e)
         if tries <= len(HttpProxy.RETRY_SCHEDULE):
           # Wait a bit then try again.
           delay = HttpProxy.RETRY_SCHEDULE[tries - 1]

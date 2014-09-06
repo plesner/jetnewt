@@ -14,10 +14,16 @@ parallelism: 8
 http_cache: httpcache.db
 
 # Better tell them who they're talking to.
-http_user_agent: "interrogate.py (code: http://github.com/plesner/jetnewt, contact: c7n@p5r.org)"
+http_user_agent: "JetNewt (code: http://github.com/plesner/jetnewt, contact: c7n@p5r.org)"
 
 # Date to fetch data for.
 date: 01.10.14
+
+# The time range to cover (both times included).
+time_range:
+  start: "00:00"
+  end: "23:59"
+#  end: "06:00"
 
 # The hubs to seed the process with. The process needs to determine for each
 # route name what the start- and endpoints are. It does this by fetching the
