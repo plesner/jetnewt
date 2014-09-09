@@ -224,6 +224,71 @@ class RouteInfo(object):
         unverified[key] = journeys
     return (verified, unverified)
 
+
+# A utility for tracking which ranges have been covered in an interval. Coverage
+# trackers are immutable so adding a range produces a new tracker rather than
+# change the existing one.
+class CoverageTracker(object):
+
+  def __init__(self, ranges=[]):
+    # Sorted list of coalesced ranges that have been covered. The way this is
+    # going to be used there won't be many ranges so we can afford to be a bit
+    # wasteful here.
+    self.ranges = ranges
+
+  # Marks the range from start to end (inclusive) as being covered. Note that
+  # this doesn't change this tracker, it creates a new one.
+  def add_range(self, start, end):
+    new_ranges = []
+    index = 0
+    # Copy over the ranges that come fully before this one.
+    while index < len(self.ranges):
+      (s, e) = self.ranges[index]
+      if e >= start - 1:
+        # We've found a range that doesn't come before this one so stop.
+        break
+      else:
+        new_ranges.append((s, e))
+        index += 1
+    if index == len(self.ranges):
+      # All ranges come before this one so just add it at the end and we're
+      # done.
+      return CoverageTracker(new_ranges + [(start, end)])
+    # If the start point of the first range that comes after this one is before
+    # this one we consume it.
+    (first_start, _) = self.ranges[index]
+    start = min(first_start, start)
+    # Now scan through the next ranges and if they fall within this one consume
+    # them. Break when we see one that reaches past the end of the one to add.
+    while index < len(self.ranges):
+      (s, e) = self.ranges[index]
+      if e > end:
+        break
+      else:
+        index += 1
+    if index < len(self.ranges):
+      # If the last range overlaps with this one adjust the bounds to cover that
+      # one as well and then consume it.
+      (last_start, last_end) = self.ranges[index]
+      if last_start <= end + 1:
+        index += 1
+        end = max(end, last_end)
+    # Add this range and any ranges that follow.
+    new_ranges.append((start, end))
+    return CoverageTracker(new_ranges + self.ranges[index:])
+
+  # Returns the least value within start and end (inclusive) that has not been
+  # covered by a range.
+  def get_next_uncovered(self, start, end):
+    for (s, e) in self.ranges:
+      if s <= start and start <= e:
+        if e < end:
+          return e + 1
+        else:
+          return None
+    return start
+
+
 # The main class that sets up the interrogation pipeline.
 class Interrogate(object):
 
@@ -353,25 +418,28 @@ class Interrogate(object):
     responses = []
     # Adds a response to the result and possibly issues the remaining requests
     # if there are more to send.
-    def process_response(response):
+    def process_response(response, start, coverage):
       responses.append(response)
-      highest_time = 0
+      end = start
       for transit in response.get_transits():
-        highest_time = max(highest_time, transit.get_timestamp())
-      if highest_time <= end:
-        # The latest transit is before the requested endtime so we need to go
-        # again, starting from the highest time seen. This will cause transits
-        # at the highest time to be returned again but we'll dedup those later.
-        return send_next_request(highest_time)
-      else:
+        end = max(end, transit.get_timestamp())
+      new_coverage = coverage.add_range(start, end - 1)
+      return send_next_request(new_coverage)
+    # Sends the remaining requests, using the given coverage tracker to control
+    # which time ranges have been covered.
+    def send_next_request(coverage):
+      timestamp = coverage.get_next_uncovered(start, end)
+      if timestamp is None:
+        # We've covered the whole range so we're done.
         return responses
-    # Sends the remaining requests, starting from the given timestamp.
-    def send_next_request(timestamp):
-      response_p = self.service.get_transits(type, id, timestamp)
-      return response_p.then(process_response)
+      else:
+        # There's more time left to cover so make another request.
+        response_p = self.service.get_transits(type, id, timestamp)
+        return response_p.then(lambda response: process_response(response, timestamp, coverage))
     # Send off a request just for the start time. If we need more then the
     # post-processing of the result will take care of issuing more requests.
-    return send_next_request(start)
+    coverage = CoverageTracker()
+    return send_next_request(coverage)
 
   # Given a list of transit board responses (which is a list of lists of
   # transits) merges all the sublists together to a flat list of transits where
