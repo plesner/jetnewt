@@ -156,6 +156,15 @@ class HttpRequestCache(object):
       self.db.commit()
     return self._run_as_owner(do_add_response)
 
+  def drop(self, url):
+    def do_drop():
+      self.db.execute("""
+        DELETE FROM requests
+        WHERE url = ?
+      """, (url,))
+      self.db.commit()
+    return self._run_as_owner(do_drop)
+
   # Closes the connection to the database, flushing any outstanding writes.
   def close(self):
     def do_close():
@@ -236,6 +245,10 @@ class HttpProxy(object):
       return self._fetch_url_from_backend(url)
     else:
       return self.scheduler.value(cached_response)
+
+  # Purges the given url from the cache.
+  def drop_from_cache(self, url):
+    self.cache.drop(url)
 
   # Issues the given request, returning a promise for the xml result.
   def fetch_xml(self, request):

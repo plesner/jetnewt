@@ -183,6 +183,14 @@ class Promise(object):
       self.waiters.append(task)
     return result
 
+  # Returns a new promise whose eventual value will be that of the given thunk
+  # applied to the value of this promise. If this task fails then the result
+  # promise will also fail with the same error.
+  def then_apply(self, on_fulfilled=None, on_failed=None):
+    def apply_on_fulfilled(value):
+      return on_fulfilled(*value)
+    return self.then(apply_on_fulfilled, on_failed)
+
   # Resolve the given promise the same way as this one, either immediately
   # if this promise has already been resolved, or eventually.
   def forward(self, that):

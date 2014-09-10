@@ -2,10 +2,17 @@ import http
 import promise
 import clock
 import abc
+import logging
+
+
+logging.basicConfig(level=logging.INFO)
+_LOG = logging.getLogger(__name__)
 
 
 ARRIVALS = "arrivals"
 DEPARTURES = "departures"
+ARRIVAL = "arrival"
+DEPARTURE = "departure"
 
 
 # Common superclass for arrivals and departures requests.
@@ -150,6 +157,9 @@ class Arrival(AbstractTransit):
   def get_terminus(self):
     return self.get_start()
 
+  def get_type(self):
+    return ARRIVAL
+
   def __unicode__(self):
     return "%s->%s" % (self.start, super(Arrival, self).__unicode__())
 
@@ -169,6 +179,9 @@ class Departure(AbstractTransit):
 
   def get_terminus(self):
     return self.get_end()
+
+  def get_type(self):
+    return DEPARTURE
 
   def __unicode__(self):
     return "%s->%s" % (super(Departure, self).__unicode__(), self.end)
@@ -194,8 +207,17 @@ class JourneyResponse(object):
   def __init__(self, source_url, transit, xml):
     self.source_url = source_url
     self.transit = transit
-    self.route_name = xml.find("JourneyName").get("name")
+    journey_name = xml.find("JourneyName")
+    if journey_name is None:
+      error = InvalidResponse("Invalid XML response to %s" % source_url)
+      error.add_invalid_url(source_url)
+      error.add_invalid_url(transit.get_source_url())
+      raise error
+    self.route_name = journey_name.get("name")
     self.stops = map(self._wrap_stop, xml.findall("Stop"))
+
+  def get_source_url(self):
+    return self.source_url
 
   def get_transit(self):
     return self.transit
@@ -348,6 +370,16 @@ class LocationRepository(object):
     return self.service.fetch(LocationRequest().set_input(name))
 
 
+class InvalidResponse(Exception):
+
+  def __init__(self, message):
+    super(InvalidResponse, self).__init__(message)
+    self.invalid_urls = []
+
+  def add_invalid_url(self, value):
+    self.invalid_urls.append(value)
+
+
 # High-level interface to rejseplanen.
 class Rejseplanen(object):
 
@@ -373,7 +405,15 @@ class Rejseplanen(object):
     http_request = request.get_http_request(self)
     url = http_request.get_url()
     xml_p = self.http.fetch_xml(http_request)
-    return xml_p.then(lambda xml: request.process_response(url, xml))
+    def process_xml(xml):
+      try:
+        return request.process_response(url, xml)
+      except InvalidResponse, e:
+        for invalid_url in e.invalid_urls:
+          _LOG.warning("Dropping %s from http cache", invalid_url)
+          self.http.drop_from_cache(invalid_url)
+        raise e
+    return xml_p.then(process_xml)
 
   # Returns a promise that will be resolved with location information about
   # the given name.

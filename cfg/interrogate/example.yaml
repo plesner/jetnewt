@@ -21,9 +21,8 @@ date: 01.10.14
 
 # The time range to cover (both times included).
 time_range:
-  start: "00:00"
-  end: "23:59"
-#  end: "06:00"
+  start: "10:00"
+  end: "14:00"
 
 # The hubs to seed the process with. The process needs to determine for each
 # route name what the start- and endpoints are. It does this by fetching the
@@ -36,7 +35,8 @@ hubs:
 
 route_whitelist:
 # Bybusser
+# - "Bus 1A"
  - "Bus [1-6]A"
- - "Bus 1[1-9]"
- - "Bus 20"
- - "Bus 3[1235]"
+# - "Bus 1[1-9]"
+# - "Bus 20"
+# - "Bus 3[1235]"
