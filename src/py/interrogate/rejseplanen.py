@@ -3,6 +3,8 @@ import promise
 import clock
 import abc
 import logging
+import cachetools
+import re
 
 
 logging.basicConfig(level=logging.INFO)
@@ -216,6 +218,9 @@ class JourneyResponse(object):
     self.route_name = journey_name.get("name")
     self.stops = map(self._wrap_stop, xml.findall("Stop"))
 
+  # Yields the url that yielded this response. Note that this url may be
+  # different from the journey url given in the transit, though only very
+  # rarely.
   def get_source_url(self):
     return self.source_url
 
@@ -230,6 +235,12 @@ class JourneyResponse(object):
 
   def _wrap_stop(self, xml):
     return JourneyStop(self, xml)
+
+  def has_transit(self, transit):
+    for stop in self.get_stops():
+      if stop.matches_transit(transit):
+        return True
+    return False
 
 
 class JourneyStop(object):
@@ -260,6 +271,18 @@ class JourneyStop(object):
   def get_departure(self):
     return self.departure
 
+  def matches_transit(self, transit):
+    if transit.get_route_name() != self.get_route_name():
+      return False
+    if transit.get_stop() != self.get_name():
+      return False
+    timestamp = transit.get_timestamp()
+    if (not self.arrival is None) and (self.arrival != timestamp):
+      return False
+    if (not self.departure is None) and (self.departure != timestamp):
+      return False
+    return True
+
   def __unicode__(self):
     return "stop { name: %s, arr: %s, dep: %s }" % (self.name, self.arrival, self.departure)
 
@@ -283,32 +306,50 @@ class LocationRequest(object):
       .add_param(input=self.input))
 
   def process_response(self, url, xml):
-    return LocationResponse(xml)
+    return LocationResponse(url, xml)
 
 
 # The result of a location request.
 class LocationResponse(object):
 
-  def __init__(self, xml):
-    self.stop_locations = map(StopLocation, xml.findall("StopLocation"))
+  def __init__(self, url, xml):
+    self.url = url
+    self.stop_locations = map(self._wrap_stop_location, xml.findall("StopLocation"))
+
+  def get_source_url(self):
+    return self.url
 
   # Returns a list of the stop location object contained in the response.
   def get_stop_locations(self):
     return self.stop_locations
 
+  def _wrap_stop_location(self, xml):
+    return StopLocation(self, xml)
+
+
 
 # Wrapper around an xml stop location object.
 class StopLocation(object):
 
-  def __init__(self, xml):
+  def __init__(self, response, xml):
+    self.response = response
     self.name = xml.get("name")
     self.id = xml.get("id")
+    self.x = int(xml.get("x"))
+    self.y = int(xml.get("y"))
+    self.xml = xml
+
+  def get_source_url(self):
+    return self.response.get_source_url()
 
   def get_name(self):
     return self.name
 
   def get_id(self):
     return self.id
+
+  def get_position(self):
+    return (self.x, self.y)
 
   def __str__(self):
     return "stop location {name: %s, id: %s}" % (self.name, self.id)
@@ -391,7 +432,7 @@ class Rejseplanen(object):
       user_agent=http_user_agent, reqs_per_sec=reqs_per_sec, max_accum=max_accum,
       pool_size=parallelism)
     self.location_repo = LocationRepository(scheduler, self)
-    self.journey_cache = {}
+    self.journey_cache = cachetools.LRUCache(maxsize=8192)
 
   # Returns the full rest api path given an endpoint.
   def get_request_path(self, endpoint):
@@ -439,13 +480,53 @@ class Rejseplanen(object):
       assert type == DEPARTURES
       return self.get_departures(id, timestamp)
 
+  # Returns the given transit's journey details.
   def get_journey(self, transit):
     url = transit.get_journey_url()
-    if url in self.journey_cache:
-      return self.journey_cache[url]
+    return self._get_journey_by_url(transit, url, True)
+
+  # Returns the given transit's journey details, fetched from the given url. If
+  # the result is inconsistent (detected by the transit not occurring in the
+  # journey) then we'll try again with the url adjusted if adjust_on_failure is
+  # True, otherwise the inconsistent result will just be returned.
+  def _get_journey_by_url(self, transit, url, adjust_on_inconsistent):
+    cached = self.journey_cache.get(url, None)
+    if not cached is None:
+      return cached
+    def retry_on_inconsistent(response):
+      if response.has_transit(transit):
+        return response
+      else:
+        new_url = self._adjust_journey_url(url)
+        if new_url is None:
+          return response
+        else:
+          return self._get_journey_by_url(transit, new_url, False)
     result = self.fetch(JourneyRequest(url, transit))
+    if adjust_on_inconsistent:
+      result = result.then(retry_on_inconsistent)
     self.journey_cache[url] = result
     return result
+
+  _JOURNEY_RE = re.compile(r"^(.*date\%3D)(\d\d\.\d\d\.\d\d)$")
+  # Given a url that is known to have returned an inconsistent result, return
+  # an adjusted url that may give the right result. This is a workaround for
+  # a bug on rejseplanen where they get the dates wrong around midnight, they
+  # return the next day instead of the one we're interested in.
+  def _adjust_journey_url(self, url):
+    matcher = Rejseplanen._JOURNEY_RE.match(url)
+    if matcher is None:
+      _LOG.warning("Failed to adjust URL %s", url)
+      return None
+    base_url = matcher.group(1)
+    date = matcher.group(2)
+    new_date = clock.get_previous_date(date)
+    if new_date == date:
+      # Returning the same url will cause a deadlock in the caller so check for
+      # that explicitly.
+      _LOG.warning("Failed to get previous date for %s", date)
+      return None
+    return "%s%s" % (base_url, new_date)
 
   # Closes the http connection down cleanly.
   def close(self):

@@ -17,3 +17,9 @@ class Timestamp(object):
     tup = time.strptime("%s-%s" % (date_str, time_str), "%d.%m.%y-%H:%M")
     secs = time.mktime(tup)
     return int(secs * 1000)
+
+# Given a date as a string, returns the previous date string.
+def get_previous_date(date):
+  midnight = Timestamp.from_date_time(date, "00:00")
+  hour_before_midnight = midnight - (1000 * 60 * 60)
+  return Timestamp.to_date(hour_before_midnight)

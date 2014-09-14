@@ -89,6 +89,18 @@ class Scheduler(object):
       add_handler(outer_index)
     return result_p
 
+  # Given a dictionary mapping keys to promises, returns a promise that resolves
+  # to a dict from keys to the values of the promises from the original dict.
+  # This preserves the ordering of the original dict.
+  def join_dict(self, promise_dict):
+    items = promise_dict.items()
+    if len(items) == 0:
+      return self.value({})
+    (keys, value_ps) = zip(*items)
+    def zip_back_up(values):
+      return collections.OrderedDict(zip(keys, values))
+    return self.join(value_ps).then(zip_back_up)
+
   # Adds a task, a no-argument function, to the queue of tasks this scheduler
   # should execute.
   def add_thunk(self, thunk):
@@ -105,13 +117,8 @@ class Scheduler(object):
 
   # Runs until all scheduled tasks have been performed.
   def run_all_tasks(self):
-    tasks = 0
     while self.has_more_tasks():
       self.run_next_task()
-      tasks += 1
-      if (tasks % 1000) == 0:
-        pending = self.thunks.qsize()
-        _LOG.info("Has run %i tasks. Currently pending %i.", tasks, pending)
 
 
 # Exception thrown if attempting to get the value of a promise that hasn't been
@@ -222,6 +229,8 @@ class Promise(object):
   # the resolved values of the promises in the input dict.
   def map_dict(self, fun):
     def do_map_dict(dict):
+      if len(dict) == 0:
+        return dict
       # Extract the items from the dict to fix the order.
       items = list(dict.items())
       # Grab the keys.

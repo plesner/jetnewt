@@ -7,7 +7,7 @@ import random
 
 
 class MainTest(unittest.TestCase):
-  
+
   def test_coverage_tracker(self):
     t = main.CoverageTracker()
     self.assertEquals(0, t.get_next_uncovered(0, 10))

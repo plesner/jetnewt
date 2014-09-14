@@ -63,6 +63,7 @@ import yaml
 import rejseplanen
 import clock
 import collections
+import cachetools
 
 
 logging.basicConfig(level=logging.INFO)
@@ -177,53 +178,12 @@ class RouteInfo(object):
 
   def __init__(self, name, departure_journeys, arrival_journeys):
     self.name = name
-    self.departure_journeys = departure_journeys
-    self.arrival_journeys = arrival_journeys
+    self.journeys = (departure_journeys + arrival_journeys)
 
   # Returns a list of the journeys that can be verified as covering the complete
   # route.
-  def get_verified_journeys(self):
-    def get_stop_key(stop, timestamp):
-      stop_name = stop.get_name()
-      return (stop_name, timestamp)
-    journey_map = {}
-    joint_journeys = [
-      (True, self.departure_journeys),
-      (False, self.arrival_journeys)
-    ]
-    # Scan through all the journeys, for arrivals and departures, and collect
-    # all the identical ones. This keys on just the start and end stops, it
-    # should be safe to assume that you won't see two busses with the same
-    # name leaving the same place at the same time, and arriving at the same
-    # different place at the same time, but taking different paths.
-    for (is_depart, journeys) in joint_journeys:
-      for journey in journeys:
-        transit = journey.get_transit()
-        first = journey.get_stops()[0]
-        first_key = get_stop_key(first, first.get_departure())
-        last = journey.get_stops()[-1]
-        last_key = get_stop_key(last, last.get_arrival())
-        key = (first_key, last_key)
-        if not key in journey_map:
-          journey_map[key] = []
-        journey_map[key].append((is_depart, journey))
-    # Scan through all the pairs to find the ones that have been hit by both an
-    # arrival and a departure. Arrivals and departures each fix one terminus but
-    # not the other and if we have two together that take the same path then
-    # we've got both terminuses fixed and the route is valid.
-    verified = []
-    unverified = []
-    for (key, hits) in journey_map.items():
-      # Zip out the is_depart and journey element of each pair and make a set of
-      # the is_departs. If the set has two elements then it must contain True
-      # and False which means that we've seen the same journey from both ends.
-      (is_departs, journeys) = zip(*hits)
-      if len(set(is_departs)) == 2:
-        verified.append(journeys[0])
-      else:
-        unverified.append(journeys[0])
-    return (verified, unverified)
-
+  def get_journeys(self):
+    return self.journeys
 
 # A utility for tracking which ranges have been covered in an interval. Coverage
 # trackers are immutable so adding a range produces a new tracker rather than
@@ -316,6 +276,19 @@ class Interrogate(object):
       self._print_stats()
       self._close()
 
+  def _run_with_profiler(self):
+    import cProfile
+    import StringIO
+    import pstats
+    profile = cProfile.Profile()
+    profile.enable()
+    self._run()
+    profile.disable()
+    strio = StringIO.StringIO()
+    stats = pstats.Stats(profile, stream=strio).sort_stats('cumulative')
+    stats.print_stats(.1)
+    print strio.getvalue()
+
   # Set up the pipeline, then run it.
   def _run(self):
     self.config.log_values()
@@ -326,7 +299,7 @@ class Interrogate(object):
     schedule_end = clock.Timestamp.from_date_time(date, range_end)
     query_start = schedule_start
     query_end = schedule_end
-    while True:
+    for turn in range(0, 4):
       _LOG.info("Querying %s->%s", clock.Timestamp.to_time(query_start), clock.Timestamp.to_time(query_end))
       pipeline = Pipeline(self, query_start, query_end)
       result_p = pipeline._build_pipeline()
@@ -335,7 +308,7 @@ class Interrogate(object):
       except Exception, e:
         print result_p.get_error_trace()
         raise e
-      unexplained = result.get_unexplained_stops(schedule_start, schedule_end)
+      unexplained = result.get_unexplained_transits(schedule_start, schedule_end)
       if len(unexplained) == 0:
         # We've now explained all stops so we can stop running.
         break
@@ -343,12 +316,18 @@ class Interrogate(object):
         # There are still unexplained stops. Expand the query interval and try
         # again.
         _LOG.info("Found %i unexplained stops. Expanding scope.", len(unexplained))
-        query_start -= 2 * HOUR_IN_MILLIS
-        query_end += 2 * HOUR_IN_MILLIS
+        query_start -= 1 * HOUR_IN_MILLIS
+        query_end += 1 * HOUR_IN_MILLIS
         self.past_transit_board_cache = pipeline.new_transit_board_cache
+    if len(unexplained) > 0:
+      _LOG.info("Ran out of turns before resolving all transits")
+      for transit in unexplained:
+        _LOG.info("- %s", transit)
+    self._output_result(result)
     print "Processed: %s" % ", ".join(sorted(self.routes_processed))
     print "Ignored: %s" % ", ".join(sorted(self.routes_ignored))
 
+  # Runs the scheduler until the given promise has resolved.
   def _run_to_result(self, promise):
     while True:
       self.scheduler.run_all_tasks()
@@ -356,6 +335,13 @@ class Interrogate(object):
         return promise.get()
       else:
         time.sleep(0.1)
+
+  def _output_result(self, result):
+    stops = result.get_stops()
+    print len(stops)
+    return
+    for key in stops.keys():
+      print key, stops[key].get_position()
 
   def _print_stats(self):
     stats = self.service.get_backend_stats()
@@ -428,7 +414,7 @@ class Pipeline(object):
     self.new_transit_board_cache = {}
     self.start = start
     self.end = end
-    self.transit_cache = {}
+    self.transit_cache = cachetools.LRUCache(maxsize=8196)
 
   # The toplevel function that creates the entire pipeline without running it.
   def _build_pipeline(self):
@@ -451,8 +437,10 @@ class Pipeline(object):
     journeys_p = terminus_boards_p.map_dict(self._fetch_terminus_board_journeys)
     # For each route bundle all the information we've fetched up in an object.
     routes_p = journeys_p.map_dict(self._bundle_route)
+    # Fetch information for each stop on any route.
+    stops_p = routes_p.then(self._fetch_stop_info)
     # Finally bundle everything into a pipeline result.
-    result_args_p = self.scheduler.join([routes_p, terminus_boards_p, hub_boards_p])
+    result_args_p = self.scheduler.join([routes_p, terminus_boards_p, hub_boards_p, stops_p])
     return result_args_p.then_apply(PipelineResult)
 
   # Given the name of a stop, fetches the full departure board for that stop.
@@ -474,8 +462,9 @@ class Pipeline(object):
   # to fetch within is given by the configuration.
   def _fetch_transits_by_id(self, type, id):
     cache_key = (type, id)
-    if cache_key in self.transit_cache:
-      return self.transit_cache[cache_key]
+    cached = self.transit_cache.get(cache_key, None)
+    if not cached is None:
+      return cached
     result = self._fetch_transits_within(type, id, self.start, self.end).then(self._merge_transits)
     self.transit_cache[cache_key] = result
     return result
@@ -617,67 +606,86 @@ class Pipeline(object):
     (departure_journeys, arrival_journeys) = input
     return RouteInfo(route_name, departure_journeys, arrival_journeys)
 
+  # Returns a map from names of stops on any of the routes to info about that
+  # stop.
+  def _fetch_stop_info(self, route_info_map):
+    # First make a list of all the names to fetch so we can fetch them in
+    # order. Since each request fetches a block of names, if you change the
+    # order you change the requests that get sent. So it's better to stick to
+    # one order.
+    names = set()
+    for route_info in route_info_map.values():
+      for journey in route_info.get_journeys():
+        for stop in journey.get_stops():
+          names.add(stop.get_name())
+    infos = collections.OrderedDict()
+    for name in sorted(names):
+      infos[name] = self.service.get_location_info_by_name(name)
+    return self.scheduler.join_dict(infos)
+
 
 class PipelineResult(object):
 
-  def __init__(self, routes, terminus_boards, hub_boards):
+  def __init__(self, routes, terminus_boards, hub_boards, stops):
     self.routes = routes
     self.terminus_boards = terminus_boards
     self.hub_boards = hub_boards
+    self.stops = stops
+
+  def get_stops(self):
+    return self.stops
 
   # Returns a list of transits seen on the transit boards that can't be
   # explained by verified routes.
-  def get_unexplained_stops(self, start, end):
-    # Returns a mapping from stops keys in the given list of journeys to stop
-    # objects.
-    def get_stops_on_journey(journeys):
-      stops = {}
-      for journey in journeys:
-        for stop in journey.get_stops():
-          route_name = stop.get_route_name()
-          stop_name = stop.get_name()
-          arrival = stop.get_arrival()
-          if (not arrival is None):
-            key = (route_name, rejseplanen.ARRIVAL, stop_name, arrival)
-            stops[key] = stop
-          departure = stop.get_departure()
-          if not departure is None:
-            key = (route_name, rejseplanen.DEPARTURE, stop_name, departure)
-            stops[key] = stop
-      return stops      
+  def get_unexplained_transits(self, start, end):
     # Build a set of all the stops on all the transit boards that we'll need
     # an explanation for.
-    transit_map = {}
-    stops_to_explain = set()
-    # Given a list where each element is the list of transit boards for a
-    # terminus, adds all the relevant transits to the transit map and set.
-    def add_board_stops(board):
-      for terminus in board:
-        for transit in terminus:
-          stop_name = transit.get_stop()
-          timestamp = transit.get_timestamp()
-          if start <= timestamp and timestamp <= end:
-            # We're only interested in stops that happen within the given
-            # interval. The rest can just be ignored.
-            key = (route_name, transit.get_type(), stop_name, timestamp)
-            stops_to_explain.add(key)
-            transit_map[key] = transit
-    # Add the terminus boards for each route.
+    transits = {}
+    # Add the boards.
+    for transit in self._get_transits():
+      timestamp = transit.get_timestamp()
+      if start <= timestamp and timestamp <= end:
+        # We're only interested in stops that happen within the given
+        # interval. The rest can just be ignored.
+        key = (transit.get_route_name(), transit.get_type(), transit.get_stop(), timestamp)
+        transits[key] = transit
+    # See if we can explain the stops seen above.
+    explained = {}
+    for journey in self._get_journeys():
+      for stop in journey.get_stops():
+        route_name = stop.get_route_name()
+        stop_name = stop.get_name()
+        arrival = stop.get_arrival()
+        if (not arrival is None):
+          key = (route_name, rejseplanen.ARRIVAL, stop_name, arrival)
+          explained[key] = stop
+        departure = stop.get_departure()
+        if not departure is None:
+          key = (route_name, rejseplanen.DEPARTURE, stop_name, departure)
+          explained[key] = stop
+    unexplained_keys = set(transits.keys()).difference(explained.keys())
+    return [transits[k] for k in unexplained_keys]
+
+  # Generates all the journeys in all the routes.
+  def _get_journeys(self):
+    for (route_name, route_info) in self.routes.items():
+      for journey in route_info.get_journeys():
+        yield journey
+
+  # Generates all transit boards, both for terminuses and hubs.
+  def _get_boards(self):
     for (route_name, boards) in self.terminus_boards.items():
       for board in boards:
-        add_board_stops(board)
-    # Add the hub boards.
+        yield board
     for board in self.hub_boards:
-      add_board_stops(board)
-    # Finally, see if we can explain the stops.
-    verified_explained = {}
-    unverified_explained = {}
-    for (route_name, route_info) in self.routes.items():
-      (verified, unverified) = route_info.get_verified_journeys()
-      verified_explained.update(get_stops_on_journey(verified))
-    unexplained_keys = stops_to_explain.difference(verified_explained.keys())
-    return [transit_map[k] for k in unexplained_keys]
+      yield board
 
+  # Generates all the transits on all boards for both terminuses and hubs.
+  def _get_transits(self):
+    for board in self._get_boards():
+      for terminus in board:
+        for transit in terminus:
+          yield transit
 
 if __name__ == "__main__":
   Interrogate(sys.argv[1:]).main()

@@ -10,6 +10,7 @@ import zlib
 import threading
 import Queue
 import sys
+import cachetools
 
 
 logging.basicConfig(level=logging.INFO)
@@ -79,6 +80,7 @@ class HttpRequestCache(object):
     self.tasks = Queue.Queue()
     self.filename = filename
     self.keep_going = True
+    self.memcache = cachetools.LRUCache(maxsize=32768)
     thread = threading.Thread(target=self._run_owner_thread)
     thread.daemon = True
     thread.start()
@@ -88,9 +90,28 @@ class HttpRequestCache(object):
   def _run_owner_thread(self):
     self.db = sqlite3.connect(self.filename)
     self.db.execute("CREATE TABLE IF NOT EXISTS requests (timestamp, url, response)")
+    self._prime_memcache()
     while self.keep_going:
       (thunk, chan) = self.tasks.get()
       chan.put(thunk())
+
+  # Load the full contents of the cache into memory.
+  def _prime_memcache(self):
+    _LOG.info("Priming request cache")
+    cursor = self.db.execute("""
+      SELECT url, response
+      FROM requests
+      ORDER BY timestamp ASC
+    """)
+    bytes = 0
+    entries = 0
+    for row in cursor:
+      url = row[0]
+      response_zip = row[1]
+      self.memcache[url] = response_zip
+      bytes += len(response_zip)
+      entries += 1
+    _LOG.info("Loaded %iMB of compressed cache, %i entries", int(bytes / 1000000.0), entries)
 
   # Submit a task to be executed on the owner thread. The submitting thread
   # will block until the task has been executed. The result will be the task's
@@ -111,19 +132,24 @@ class HttpRequestCache(object):
   # haven't seen that url before.
   def get_response(self, url):
     def do_get_response():
-      cursor = self.db.execute("""
-        SELECT response
-        FROM requests
-        WHERE url = ?
-        ORDER BY timestamp DESC
-      """, (url,))
-      result = cursor.fetchone()
-      if result is None:
-        return None
+      cached = self.memcache.get(url)
+      if not cached is None:
+        response_zip = cached
       else:
-        response_zip = result[0]
-        response_str = zlib.decompress(response_zip)
-        return response_str.decode("utf-8")
+        cursor = self.db.execute("""
+          SELECT response
+          FROM requests
+          WHERE url = ?
+          ORDER BY timestamp DESC
+        """, (url,))
+        result = cursor.fetchone()
+        if result is None:
+          return None
+        else:
+          response_zip = result[0]
+          self.memcache[url] = response_zip
+      response_str = zlib.decompress(response_zip)
+      return response_str.decode("utf-8")
     return self._run_as_owner(do_get_response)
 
   # Returns the timestamp of the latest request to any url.
@@ -149,6 +175,7 @@ class HttpRequestCache(object):
       # conversion stuff is really fragile so watch out if you change it.
       response_str = response.encode("utf-8")
       response_zip = buffer(zlib.compress(response_str, 9))
+      self.memcache[url] = response_zip
       self.db.execute("""
         INSERT INTO requests
         VALUES (?, ?, ?)
@@ -158,6 +185,7 @@ class HttpRequestCache(object):
 
   def drop(self, url):
     def do_drop():
+      del self.memcache[url]
       self.db.execute("""
         DELETE FROM requests
         WHERE url = ?

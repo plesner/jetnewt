@@ -17,12 +17,12 @@ http_cache: httpcache.db
 http_user_agent: "JetNewt (code: http://github.com/plesner/jetnewt, contact: c7n@p5r.org)"
 
 # Date to fetch data for.
-date: 01.10.14
+date: 02.10.14
 
 # The time range to cover (both times included).
 time_range:
-  start: "10:00"
-  end: "14:00"
+  start: "23:30"
+  end: "23:59"
 
 # The hubs to seed the process with. The process needs to determine for each
 # route name what the start- and endpoints are. It does this by fetching the
@@ -31,12 +31,15 @@ time_range:
 # connected stops here that between them occur on all the routes we're trying
 # to cover.
 hubs:
- - Århus rtb.
+# - Århus rtb.
+ - Dalgas Avenue v. Tangkrogen (Aarhus)
+# - Viby Torv
+# - Lystrup. Bygaden  (Aarhus)
 
 route_whitelist:
 # Bybusser
-# - "Bus 1A"
  - "Bus [1-6]A"
+# - "Bus [1-6]A"
 # - "Bus 1[1-9]"
 # - "Bus 20"
 # - "Bus 3[1235]"
